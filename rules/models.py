@@ -15,6 +15,24 @@ if TYPE_CHECKING:
     from accounts.models import User
 
 
+class RulesetQuerySet(models.QuerySet["Ruleset"]):
+    def deleted(self) -> Self:
+        """Deleted rulesets (only reachable through `Ruleset.all_objects`)."""
+        return self.filter(deleted_at__isnull=False)
+
+
+class _NotDeletedManager(models.Manager):
+    """
+    Default manager of Rule and Ruleset: leaves deleted rows out, so every
+    list, count, related manager (`ruleset.rules`), detail lookup and the
+    admin exclude them by construction (PLAN.md 12.11). Deleted rows are
+    reached deliberately through `all_objects`.
+    """
+
+    def get_queryset(self) -> models.QuerySet:
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+
 class Ruleset(models.Model):
     """The rules of one source file, or a named manual collection."""
 
@@ -35,6 +53,21 @@ class Ruleset(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(default=timezone.now, help_text="Content last changed.")
     last_imported_at = models.DateTimeField(null=True, blank=True)
+    # Recoverable delete (PLAN.md 12.11); the ruleset still holds its
+    # (origin, path) identity, so imports of its file are skipped.
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by: models.ForeignKey[User | None] = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    objects: ClassVar[RulesetManager] = cast(
+        "RulesetManager", _NotDeletedManager.from_queryset(RulesetQuerySet)()
+    )
+    all_objects: ClassVar[RulesetManager] = cast("RulesetManager", RulesetQuerySet.as_manager())
 
     # Reverse relations, declared for the type checker only.
     rules: RuleRelatedManager
@@ -45,12 +78,19 @@ class Ruleset(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["origin", "path"], name="unique_ruleset_origin_path"),
         ]
+        permissions = [
+            ("purge_ruleset", "Can permanently delete rulesets with their history"),
+        ]
 
     def __str__(self) -> str:
         return self.name
 
     def get_absolute_url(self) -> str:
         return reverse("rules:ruleset_detail", kwargs={"pk": self.pk})
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
 
 
 class TagQuerySet(models.QuerySet["Tag"]):
@@ -60,10 +100,16 @@ class TagQuerySet(models.QuerySet["Tag"]):
 
 class RuleQuerySet(models.QuerySet["Rule"]):
     def active(self) -> Self:
-        return self.filter(removed_at__isnull=True)
+        """Rules that take part in compiles, scans and exports: neither removed nor deleted."""
+        return self.filter(removed_at__isnull=True, deleted_at__isnull=True)
 
     def removed(self) -> Self:
-        return self.filter(removed_at__isnull=False)
+        """Rules dropped from their file (and not deleted)."""
+        return self.filter(removed_at__isnull=False, deleted_at__isnull=True)
+
+    def deleted(self) -> Self:
+        """Deleted rules (only reachable through `Rule.all_objects`)."""
+        return self.filter(deleted_at__isnull=False)
 
     def failing(self) -> Self:
         return self.exclude(compile_error="")
@@ -82,6 +128,8 @@ if TYPE_CHECKING:
     class TagManager(models.Manager["Tag"], TagQuerySet): ...
 
     class RuleManager(models.Manager["Rule"], RuleQuerySet): ...
+
+    class RulesetManager(models.Manager["Ruleset"], RulesetQuerySet): ...
 
     class RuleRelatedManager(RelatedManager["Rule"], RuleQuerySet): ...
 
@@ -118,14 +166,35 @@ class Rule(models.Model):
     imported_sha256 = models.CharField(
         max_length=64, blank=True, help_text="Content as last imported; blank for manual rules."
     )
+    imported_name = models.CharField(
+        max_length=128,
+        blank=True,
+        help_text="Name in the file as last imported (kept when the rule is renamed locally); "
+        "blank for manual rules and for rules last imported before this was recorded.",
+    )
     version = models.PositiveIntegerField(default=1)
     compile_error = models.TextField(blank=True)
     compile_warnings: models.JSONField[list[str]] = models.JSONField(default=list, blank=True)
     removed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(default=timezone.now, help_text="Content last changed.")
+    # Recoverable delete (PLAN.md 12.11), distinct from removed_at. A rule
+    # deleted together with its ruleset is marked so that restoring the
+    # ruleset brings back exactly those rules.
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by: models.ForeignKey[User | None] = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    deleted_with_ruleset = models.BooleanField(default=False)
 
-    objects: ClassVar[RuleManager] = cast("RuleManager", RuleQuerySet.as_manager())
+    objects: ClassVar[RuleManager] = cast(
+        "RuleManager", _NotDeletedManager.from_queryset(RuleQuerySet)()
+    )
+    all_objects: ClassVar[RuleManager] = cast("RuleManager", RuleQuerySet.as_manager())
 
     versions: RelatedManager[RuleVersion]
 
@@ -137,10 +206,48 @@ class Rule(models.Model):
         indexes = [
             models.Index(fields=["name"]),
             models.Index(fields=["updated_at"]),
+            # Rules in file order (compile checks, ruleset pages).
+            models.Index(fields=["ruleset", "position"], name="rule_ruleset_position_idx"),
+            # Partial indexes for the status filters of the rule list (sorted
+            # by name); each condition is written exactly as the queryset
+            # methods / list filters spell it, so SQLite can match it.
+            models.Index(
+                fields=["name"],
+                condition=models.Q(removed_at__isnull=True, deleted_at__isnull=True)
+                & ~models.Q(compile_error=""),
+                name="rule_failing_name_idx",
+            ),
+            models.Index(
+                fields=["name"],
+                condition=models.Q(removed_at__isnull=False, deleted_at__isnull=True),
+                name="rule_removed_name_idx",
+            ),
+            models.Index(
+                fields=["name"],
+                condition=models.Q(
+                    removed_at__isnull=True, deleted_at__isnull=True, compile_error=""
+                )
+                & ~models.Q(compile_warnings=[]),
+                name="rule_warnings_name_idx",
+            ),
+            models.Index(
+                fields=["name"],
+                condition=models.Q(removed_at__isnull=True, deleted_at__isnull=True)
+                & ~models.Q(imported_sha256="")
+                & ~models.Q(sha256=models.F("imported_sha256")),
+                name="rule_modified_name_idx",
+            ),
+            # The "Deleted" view, newest first.
+            models.Index(
+                fields=["deleted_at"],
+                condition=models.Q(deleted_at__isnull=False),
+                name="rule_deleted_idx",
+            ),
         ]
         permissions = [
             ("import_rules", "Can import rules"),
             ("scan_rules", "Can test-scan samples"),
+            ("purge_rule", "Can permanently delete rules with their history"),
         ]
 
     def __str__(self) -> str:
@@ -162,6 +269,10 @@ class Rule(models.Model):
     @property
     def is_removed(self) -> bool:
         return self.removed_at is not None
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
 
     @property
     def compiles(self) -> bool:
@@ -273,6 +384,9 @@ class ImportRun(models.Model):
     rules_updated = models.PositiveIntegerField(default=0)
     rules_removed = models.PositiveIntegerField(default=0)
     rules_unchanged = models.PositiveIntegerField(default=0)
+    # Deleted in yaradude, so the import leaves them alone (PLAN.md 12.11).
+    files_skipped = models.PositiveIntegerField(default=0)
+    rules_skipped = models.PositiveIntegerField(default=0)
 
     files: RelatedManager[ImportFile]
     versions: RelatedManager[RuleVersion]
@@ -288,21 +402,29 @@ class ImportRun(models.Model):
 
     @property
     def summary(self) -> str:
-        return (
+        files = (
             f"files: {self.files_seen} seen, {self.files_changed} changed, "
-            f"{self.files_unchanged} unchanged, {self.files_failed} failed; "
+            f"{self.files_unchanged} unchanged, {self.files_failed} failed"
+        )
+        rules = (
             f"rules: {self.rules_created} created, {self.rules_updated} updated, "
             f"{self.rules_removed} removed, {self.rules_unchanged} unchanged"
         )
+        if self.files_skipped:
+            files += f", {self.files_skipped} skipped (deleted)"
+        if self.rules_skipped:
+            rules += f", {self.rules_skipped} skipped (deleted)"
+        return f"{files}; {rules}"
 
 
 class ImportFile(models.Model):
-    """Result for one file of an import run; only changed or failed files are stored."""
+    """Result for one file of an import run; only changed, failed or skipped files are stored."""
 
     class Status(models.TextChoices):
         CREATED = "created", "Created"
         UPDATED = "updated", "Updated"
         FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped (deleted)"
 
     run = models.ForeignKey(ImportRun, on_delete=models.CASCADE, related_name="files")
     path = models.CharField(max_length=1024)
@@ -314,6 +436,7 @@ class ImportFile(models.Model):
     rules_updated = models.PositiveIntegerField(default=0)
     rules_removed = models.PositiveIntegerField(default=0)
     rules_unchanged = models.PositiveIntegerField(default=0)
+    rules_skipped = models.PositiveIntegerField(default=0)
     message = models.TextField(blank=True)
 
     class Meta:
@@ -321,3 +444,24 @@ class ImportFile(models.Model):
 
     def __str__(self) -> str:
         return f"{self.path} ({self.get_status_display()})"
+
+
+class RulesRevision(models.Model):
+    """
+    A single row counting changes to what the compiled rule set should hold:
+    which rules are active and compile, their content and their order. It is
+    incremented by rules.services.revision.bump() inside the transaction of
+    every such write, so readers (the scan cache) can tell cheaply whether
+    anything changed. Read it with rules.services.revision.current().
+    """
+
+    number = models.PositiveBigIntegerField(default=0)
+    changed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(pk=1), name="rules_revision_single_row"),
+        ]
+
+    def __str__(self) -> str:
+        return f"revision {self.number}"

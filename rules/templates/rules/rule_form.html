@@ -19,6 +19,28 @@
   <div class="flex min-w-0 flex-col gap-4">
     {% if form.non_field_errors %}<div class="alert alert-error" role="alert">{% for error in form.non_field_errors %}<span>{{ error }}</span>{% endfor %}</div>{% endif %}
 
+    {% if conflict %}
+    <section class="alert alert-error flex-col gap-2" role="alert" aria-labelledby="conflict-heading" id="editor-conflict">
+      {% if conflict.current is None %}
+      <h2 id="conflict-heading" class="text-base">Not saved: someone else deleted this rule</h2>
+      <p>The rule was deleted while you were editing it. Your text is still in the editor below and has not been saved anywhere; copy it if you want to keep it.</p>
+      {% if perms.rules.add_rule %}<p><a href="{% url 'rules:rule_create' %}?ruleset={{ rule.ruleset_id }}">Create a new rule in {{ rule.ruleset.name }}</a> and paste your text there.</p>{% endif %}
+      {% else %}
+      <h2 id="conflict-heading" class="text-base">Not saved: someone else changed this rule</h2>
+      <p>You started from version {{ conflict.expected }}, but while you were editing the rule was saved again; it is now <a href="{% url 'rules:rule_version' rule.pk conflict.current %}">version {{ conflict.current }}</a>. Your text is still in the editor below and has not been saved.</p>
+      {% if conflict.versions %}
+      <div>
+        <p class="font-medium">Saved meanwhile (each link shows what that version changed):</p>
+        <ul class="mt-1 flex list-disc flex-col gap-0.5 pl-5">
+          {% for version in conflict.versions %}<li><a class="font-mono" href="{{ version.get_absolute_url }}">version {{ version.number }}</a> · {{ version.get_origin_display }} {{ version.created_at|ts }}{% if version.created_by %} by {{ version.created_by.get_username }}{% elif version.import_run %} by an import run{% endif %}{% if version.number == conflict.current %} <span class="badge badge-neutral">current</span>{% endif %}</li>{% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <p>To keep both changes, work the changes above into your text, then save. <strong>Saving now replaces version {{ conflict.current }} with the text in the editor.</strong></p>
+      {% endif %}
+    </section>
+    {% endif %}
+
     {% if creating %}
     <div class="card card-body grid gap-4 sm:grid-cols-2">
       <div>
@@ -50,9 +72,13 @@
     </div>
 
     <div class="flex flex-wrap gap-2">
-      <button type="submit" name="action" value="save" class="btn btn-primary">Save</button>
+      {% if conflict and conflict.current is None %}
+      <a class="btn" href="{{ rule.ruleset.get_absolute_url }}">Back to {{ rule.ruleset.name }}</a>
+      {% else %}
+      <button type="submit" name="action" value="save" class="btn btn-primary">{% if conflict %}Save over version {{ conflict.current }}{% else %}Save{% endif %}</button>
       <button type="submit" name="action" value="validate" class="btn">Validate</button>
       <a class="btn btn-ghost" href="{% if rule %}{{ rule.get_absolute_url }}{% else %}{% url 'rules:rule_list' %}{% endif %}">Cancel</a>
+      {% endif %}
     </div>
   </div>
 

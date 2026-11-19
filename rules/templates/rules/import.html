@@ -13,17 +13,34 @@
     <div class="card-header"><h2 id="scan-heading">Rules directory</h2></div>
     <form method="post" action="{% url 'rules:import_scan' %}" class="card-body flex flex-1 flex-col gap-4" data-busy>
       {% csrf_token %}
-      <p class="text-sm text-muted">Imports every <code>.yar</code> and <code>.yara</code> file below the server's rules directory; hidden files are skipped and files missing from disk change nothing.</p>
+      <p class="text-sm text-muted">Imports every <code>.yar</code> and <code>.yara</code> file below the server's rules directory. Hidden files and symbolic links to places outside the directory are ignored, files over {{ max_file_bytes|filesizeformat }} are recorded as failed, and files missing from disk change nothing.</p>
       <dl class="meta-list">
         <dt>Directory</dt>
         <dd class="font-mono text-xs break-all">{{ rules_dir }}</dd>
         <dt>Rule files</dt>
-        <dd>{% if rules_dir_files is None %}<span class="badge badge-error">Directory not found</span>{% elif rules_dir_files == 0 %}<span class="badge badge-warn">No .yar / .yara files</span>{% else %}{{ rules_dir_files }}{% if rules_dir_files >= max_counted_files %}+{% endif %} file{{ rules_dir_files|pluralize }}{% endif %}</dd>
+        <dd>{% with status=rules_dir_status %}{% if not status.exists %}<span class="badge badge-error">Directory not found</span>{% elif not status.importable and not status.skipped %}<span class="badge badge-warn">No .yar / .yara files</span>{% else %}{{ status.importable }} file{{ status.importable|pluralize }} to import{% if status.skipped %}<div class="text-xs text-warn">{{ status.skipped|length }} more will be skipped</div>{% endif %}{% endif %}{% endwith %}</dd>
         <dt>Last scan</dt>
         <dd>{% if last_scan %}<a href="{{ last_scan.get_absolute_url }}">{{ last_scan.started_at|ts }}</a><div class="text-xs text-muted">{{ last_scan.files_changed }} changed, {{ last_scan.files_unchanged }} unchanged{% if last_scan.files_failed %}, <span class="text-error">{{ last_scan.files_failed }} failed</span>{% endif %}</div>{% else %}<span class="text-faint">never</span>{% endif %}</dd>
       </dl>
-      {% if not rules_dir_files %}<p class="help mt-0">{% if rules_dir_files is None %}The directory is configured with YARADUDE_RULES_DIR; ask an administrator to mount or create it.{% else %}Put rule files into the directory, or use the upload instead.{% endif %}</p>{% endif %}
-      <div class="mt-auto"><button type="submit" class="btn btn-primary" data-busy-label="Importing…"{% if not rules_dir_files %} disabled{% endif %}>Scan and import</button></div>
+      {% with status=rules_dir_status %}
+      {% if status.skipped %}
+      <div class="alert alert-warning flex-col gap-1" role="status">
+        <p><strong>{{ status.skipped|length }} file{{ status.skipped|pluralize }} will be skipped</strong> and recorded as failed in the import run:</p>
+        <ul class="flex flex-col gap-1">
+          {% for reason, paths in status.reasons %}
+          <li>
+            <details>
+              <summary class="cursor-pointer">{{ reason }} ({{ paths|length }} file{{ paths|pluralize }})</summary>
+              <ul class="mt-1 max-h-40 overflow-y-auto font-mono text-xs break-all">{% for path in paths %}<li>{{ path }}</li>{% endfor %}</ul>
+            </details>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      {% if not status.importable %}<p class="help mt-0">{% if not status.exists %}The directory is configured with YARADUDE_RULES_DIR; ask an administrator to mount or create it.{% elif status.skipped %}None of its rule files can be imported; fix or remove them, or use the upload instead.{% else %}Put rule files into the directory, or use the upload instead.{% endif %}</p>{% endif %}
+      <div class="mt-auto"><button type="submit" class="btn btn-primary" data-busy-label="Importing…"{% if not status.importable %} disabled{% endif %}>Scan and import</button></div>
+      {% endwith %}
     </form>
   </section>
 
@@ -31,7 +48,7 @@
     <div class="card-header"><h2 id="upload-heading">Upload files</h2></div>
     <form method="post" action="{% url 'rules:import_upload' %}" enctype="multipart/form-data" class="card-body flex flex-1 flex-col gap-4" data-busy>
       {% csrf_token %}
-      {% with field=upload_form.files %}
+      {% with field=upload_form.rule_files %}
       <div class="dropzone" data-dropzone>
         <p class="font-medium text-fg">Drop <code>.yar</code> / <code>.yara</code> files here</p>
         <p>or</p>
@@ -62,6 +79,7 @@
           <th scope="col" class="num">New</th>
           <th scope="col" class="num">Updated</th>
           <th scope="col" class="num">Removed</th>
+          <th scope="col" class="num hidden lg:table-cell"><abbr title="Rules (and files) left alone because they are deleted here">Skipped</abbr></th>
           <th scope="col" class="num">Failed</th>
           <th scope="col" class="hidden md:table-cell">By</th>
         </tr>
@@ -76,6 +94,7 @@
           <td class="num{% if run.rules_created %} text-ok{% endif %}">{{ run.rules_created }}</td>
           <td class="num">{{ run.rules_updated }}</td>
           <td class="num{% if run.rules_removed %} text-removed{% endif %}">{{ run.rules_removed }}</td>
+          <td class="num hidden lg:table-cell{% if run.files_skipped or run.rules_skipped %} text-removed{% endif %}" title="{{ run.files_skipped }} file{{ run.files_skipped|pluralize }} of deleted rulesets, {{ run.rules_skipped }} deleted rule{{ run.rules_skipped|pluralize }}">{{ run.rules_skipped }}{% if run.files_skipped %} <span class="text-xs">+{{ run.files_skipped }} file{{ run.files_skipped|pluralize }}</span>{% endif %}</td>
           <td class="num{% if run.files_failed %} font-semibold text-error{% endif %}">{{ run.files_failed }}</td>
           <td class="hidden text-muted md:table-cell">{{ run.user.get_username|default:"—" }}</td>
         </tr>

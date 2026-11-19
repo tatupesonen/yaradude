@@ -1,14 +1,14 @@
 """Forms of the web UI. They validate input only; business logic is in rules.services."""
 
-import unicodedata
-
 from django import forms
 from django.conf import settings
 from django.db import models
 from django.template.defaultfilters import filesizeformat
 
 from rules.models import Ruleset
+from rules.services import importer
 from rules.services.importer import MAX_FILE_BYTES, RULE_SUFFIXES
+from rules.services.names import has_control_characters
 
 # ------------------------------------------------------------------ rules list
 
@@ -21,7 +21,11 @@ STATUS_CHOICES = [
     ("all", "All, including removed"),
 ]
 
+RELEVANCE = "relevance"
+
 SORT_CHOICES = [
+    # Offered (and the default) only while a search is active.
+    (RELEVANCE, "Relevance"),
     ("name", "Name"),
     ("-name", "Name, descending"),
     ("ruleset", "Ruleset"),
@@ -44,17 +48,45 @@ class RuleFilterForm(forms.Form):
     sort = forms.ChoiceField(required=False, choices=SORT_CHOICES)
 
     def values(self) -> dict:
-        """The valid filter values; anything invalid falls back to its default."""
+        """
+        The valid filter values; anything invalid falls back to its default.
+        The default sort is relevance while searching, else name; relevance
+        without a search falls back to name.
+        """
         self.is_valid()
         data = getattr(self, "cleaned_data", {})
+        q = (data.get("q") or "").strip()
+        sort = data.get("sort") or default_sort(q)
+        if sort == RELEVANCE and not q:
+            sort = "name"
         return {
-            "q": (data.get("q") or "").strip(),
+            "q": q,
             "ruleset": data.get("ruleset"),
             "path": (data.get("path") or "").strip(),
             "tag": (data.get("tag") or "").strip(),
             "status": data.get("status") or "",
-            "sort": data.get("sort") or "name",
+            "sort": sort,
         }
+
+
+def default_sort(q: str) -> str:
+    """The rules list's sort when none is chosen: relevance while searching."""
+    return RELEVANCE if q else "name"
+
+
+class IdListField(forms.Field):
+    """A list of positive integer ids from repeated form values (e.g. checkboxes)."""
+
+    widget = forms.MultipleHiddenInput
+
+    def to_python(self, value):
+        if not value:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not all(str(item).isdigit() for item in value):
+            raise forms.ValidationError("Invalid selection.")
+        return [int(item) for item in value]
 
 
 FORMAT_CHOICES = [("yar", "Single .yar file"), ("zip", ".zip, one file per ruleset")]
@@ -65,12 +97,8 @@ class ExportForm(forms.Form):
 
     format = forms.ChoiceField(choices=FORMAT_CHOICES, required=False)
     scope = forms.ChoiceField(choices=[("selected", "Selected"), ("filter", "Filter")])
-    ids = forms.TypedMultipleChoiceField(coerce=int, required=False)
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Any integer is acceptable here; the view only exports rules that exist.
-        self.fields["ids"].valid_value = lambda value: str(value).isdigit()
+    # Any ids are acceptable here; the view only exports rules that exist.
+    ids = IdListField(required=False)
 
 
 # ------------------------------------------------------------------ rulesets list
@@ -78,7 +106,9 @@ class ExportForm(forms.Form):
 
 class RulesetFilterForm(forms.Form):
     q = forms.CharField(required=False, max_length=200, label="Search")
-    origin = forms.ChoiceField(required=False, choices=[("", "Any origin"), *Ruleset.Origin.choices])
+    origin = forms.ChoiceField(
+        required=False, choices=[("", "Any origin"), *Ruleset.Origin.choices]
+    )
     sort = forms.ChoiceField(
         required=False,
         choices=[
@@ -157,7 +187,9 @@ class RuleCreateForm(RuleEditForm):
         if selected.isdigit():
             query |= models.Q(pk=int(selected))
         rulesets = (
-            Ruleset.objects.filter(query).order_by("name", "pk").only("pk", "name", "origin", "path")
+            Ruleset.objects.filter(query)
+            .order_by("name", "pk")
+            .only("pk", "name", "origin", "path")
         )
         self.fields["ruleset"].choices = [
             (NEW_RULESET, "New manual collection…"),
@@ -171,9 +203,11 @@ class RuleCreateForm(RuleEditForm):
             name = (cleaned.get("new_ruleset") or "").strip()
             if not name:
                 self.add_error("new_ruleset", "Name the new collection.")
-            elif any(unicodedata.category(char) in ("Cc", "Cf", "Zl", "Zp") for char in name):
+            elif has_control_characters(name):
                 self.add_error(
-                    "new_ruleset", "The name must not contain line breaks or control characters."
+                    "new_ruleset",
+                    "The name must be a single line of visible text: no line breaks, tabs, "
+                    "control characters or invisible formatting characters.",
                 )
             cleaned["new_ruleset"] = name
             cleaned["ruleset_obj"] = None
@@ -204,18 +238,25 @@ class MultipleFileField(forms.FileField):
 
 
 class UploadForm(forms.Form):
-    files = MultipleFileField(
+    rule_files = MultipleFileField(
         label="Rule files",
-        widget=MultipleFileInput(attrs={"accept": ",".join(RULE_SUFFIXES), "class": "peer sr-only"}),
-        help_text=(
-            f"{' or '.join(RULE_SUFFIXES)} files, up to {filesizeformat(MAX_FILE_BYTES)} each. "
-            "Each file becomes one ruleset, identified by its file name."
+        widget=MultipleFileInput(
+            attrs={"accept": ",".join(RULE_SUFFIXES), "class": "peer sr-only"}
         ),
         error_messages={"required": "Choose at least one file (or the upload was too large)."},
     )
 
-    def clean_files(self):
-        files = self.cleaned_data["files"]
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Read the limit per request: it is the setting the importer applies.
+        self.fields["rule_files"].help_text = (
+            f"{' or '.join(RULE_SUFFIXES)} files, up to "
+            f"{filesizeformat(importer.max_file_bytes())} each; larger files are recorded "
+            "as failed. Each file becomes one ruleset, identified by its file name."
+        )
+
+    def clean_rule_files(self):
+        files = self.cleaned_data["rule_files"]
         if not files:
             raise forms.ValidationError("Choose at least one file.")
         return files

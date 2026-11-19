@@ -10,7 +10,7 @@
 <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
   <div>
     <h1><span class="font-mono">{{ rule.name }}</span> · version {{ version.number }}</h1>
-    <p class="mt-1 text-sm text-muted">{{ version.get_origin_display }} {{ version.created_at|ts }}{% if version.created_by %} by {{ version.created_by.get_username }}{% elif version.import_run %} by <a href="{{ version.import_run.get_absolute_url }}">an import run</a>{% endif %}</p>
+    <p class="mt-1 text-sm text-muted">{{ version.get_origin_display }} {{ version.created_at|ts }}{% if version.created_by %} by {{ version.created_by.get_username }}{% elif version.import_run %} by <a href="{{ version.import_run.get_absolute_url }}">an import run</a>{% endif %}{% if version.number != rule.version %} · current: <a href="{% url 'rules:rule_version' rule.pk rule.version %}">version {{ rule.version }}</a>{% endif %}</p>
   </div>
   <div class="flex flex-wrap items-center gap-2">
     {% if previous %}<a class="btn btn-sm" href="{{ previous.get_absolute_url }}" rel="prev">← v{{ previous.number }}</a>{% endif %}
@@ -21,7 +21,8 @@
       {% else %}
       <form method="post" action="{% url 'rules:rule_restore' rule.pk version.number %}">
         {% csrf_token %}
-        <button type="submit" class="btn btn-primary">Restore this version</button>
+        <input type="hidden" name="version" value="{{ rule.version }}">
+        <button type="submit" class="btn btn-primary" title="Saves this text as version {{ rule.version|add:1 }}; the current version {{ rule.version }} stays in the history">Restore this version</button>
       </form>
       {% endif %}
     {% endif %}

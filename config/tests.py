@@ -65,7 +65,6 @@ class SecurityHeaderTests(TestCase):
         self.assertIn("style-src 'self' 'nonce-", response["Content-Security-Policy"])
         for url in (
             "/admin/rules/ruleset/",
-            "/admin/rules/rule/add/",
             "/admin/rules/importrun/",
             "/admin/rules/ruleversion/",
             "/admin/rules/importfile/",

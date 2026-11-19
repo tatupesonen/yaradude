@@ -12,45 +12,52 @@
 <div class="mb-6 grid gap-3 sm:grid-cols-2">
   <section class="card card-body" aria-labelledby="files-heading">
     <h2 id="files-heading" class="eyebrow mb-2">Files</h2>
-    <dl class="grid grid-cols-4 gap-2 text-center">
+    <dl class="grid grid-cols-[repeat(auto-fit,minmax(4.5rem,1fr))] gap-2 text-center">
       <div><dt class="text-xs text-muted">Seen</dt><dd class="stat-value">{{ run.files_seen }}</dd></div>
       <div><dt class="text-xs text-muted">Changed</dt><dd class="stat-value">{{ run.files_changed }}</dd></div>
       <div><dt class="text-xs text-muted">Unchanged</dt><dd class="stat-value text-muted">{{ run.files_unchanged }}</dd></div>
+      <div><dt class="text-xs text-muted">Skipped</dt><dd class="stat-value{% if run.files_skipped %} text-removed{% else %} text-muted{% endif %}">{{ run.files_skipped }}</dd></div>
       <div><dt class="text-xs text-muted">Failed</dt><dd class="stat-value{% if run.files_failed %} text-error{% endif %}">{{ run.files_failed }}</dd></div>
     </dl>
   </section>
   <section class="card card-body" aria-labelledby="rules-heading">
     <h2 id="rules-heading" class="eyebrow mb-2">Rules</h2>
-    <dl class="grid grid-cols-4 gap-2 text-center">
+    <dl class="grid grid-cols-[repeat(auto-fit,minmax(4.5rem,1fr))] gap-2 text-center">
       <div><dt class="text-xs text-muted">Created</dt><dd class="stat-value{% if run.rules_created %} text-ok{% endif %}">{{ run.rules_created }}</dd></div>
       <div><dt class="text-xs text-muted">Updated</dt><dd class="stat-value">{{ run.rules_updated }}</dd></div>
       <div><dt class="text-xs text-muted">Removed</dt><dd class="stat-value{% if run.rules_removed %} text-removed{% endif %}">{{ run.rules_removed }}</dd></div>
       <div><dt class="text-xs text-muted">Unchanged</dt><dd class="stat-value text-muted">{{ run.rules_unchanged }}</dd></div>
+      <div><dt class="text-xs text-muted">Skipped</dt><dd class="stat-value{% if run.rules_skipped %} text-removed{% else %} text-muted{% endif %}">{{ run.rules_skipped }}</dd></div>
     </dl>
   </section>
 </div>
 
+{% if run.files_skipped or run.rules_skipped %}
+<div class="alert alert-info mb-6" role="status"><span><strong>Skipped: deleted locally.</strong> {% if run.files_skipped %}{{ run.files_skipped }} file{{ run.files_skipped|pluralize }} belong{{ run.files_skipped|pluralize:"s," }} to a deleted ruleset{% endif %}{% if run.files_skipped and run.rules_skipped %}, and {% endif %}{% if run.rules_skipped %}{{ run.rules_skipped }} rule{{ run.rules_skipped|pluralize }} {{ run.rules_skipped|pluralize:"is,are" }} deleted here{% endif %}, so the import left {% if run.files_skipped|add:run.rules_skipped > 1 %}them{% else %}it{% endif %} alone even though the file changed. Once restored, {% if run.files_skipped|add:run.rules_skipped > 1 %}they follow{% else %}it follows{% endif %} the file again.</span></div>
+{% endif %}
+
 <section class="card" aria-labelledby="results-heading">
   <div class="card-header">
-    <h2 id="results-heading">Changed and failed files</h2>
+    <h2 id="results-heading">Changed, skipped and failed files</h2>
     <span class="text-xs text-muted">Unchanged files are counted but not listed.</span>
   </div>
   {% if files %}
   <div class="table-wrap">
     <table class="data-table">
-      <thead><tr><th scope="col">File</th><th scope="col">Result</th><th scope="col" class="num">New</th><th scope="col" class="num">Updated</th><th scope="col" class="num">Removed</th><th scope="col" class="num">Unchanged</th></tr></thead>
+      <thead><tr><th scope="col">File</th><th scope="col">Result</th><th scope="col" class="num">New</th><th scope="col" class="num">Updated</th><th scope="col" class="num">Removed</th><th scope="col" class="num">Unchanged</th><th scope="col" class="num">Skipped</th></tr></thead>
       <tbody>
         {% for file in files %}
         <tr>
           <td class="max-w-xl">
-            {% if file.ruleset %}<a class="font-mono break-all" href="{{ file.ruleset.get_absolute_url }}">{{ file.path }}</a>{% else %}<span class="font-mono break-all">{{ file.path }}</span>{% if file.status != 'failed' %} <span class="text-xs text-faint">(ruleset since deleted)</span>{% endif %}{% endif %}
+            {% if file.ruleset and not file.ruleset.is_deleted %}<a class="font-mono break-all" href="{{ file.ruleset.get_absolute_url }}">{{ file.path }}</a>{% else %}<span class="font-mono break-all">{{ file.path }}</span>{% if file.ruleset %} <span class="text-xs text-faint">(ruleset deleted)</span>{% elif file.status != 'failed' %} <span class="text-xs text-faint">(ruleset since purged)</span>{% endif %}{% endif %}
             {% if file.message %}<pre class="{% if file.status == 'failed' %}diagnostic{% else %}diagnostic diagnostic-warn{% endif %} mt-1.5 whitespace-pre-wrap">{{ file.message }}</pre>{% endif %}
           </td>
-          <td>{% if file.status == 'failed' %}<span class="badge badge-error">Failed</span>{% elif file.status == 'created' %}<span class="badge badge-ok">New</span>{% else %}<span class="badge badge-modified">Updated</span>{% endif %}</td>
+          <td>{% if file.status == 'failed' %}<span class="badge badge-error">Failed</span>{% elif file.status == 'skipped' %}<span class="badge badge-removed" title="The file changed, but its ruleset is deleted here">Skipped: deleted locally</span>{% elif file.status == 'created' %}<span class="badge badge-ok">New</span>{% else %}<span class="badge badge-modified">Updated</span>{% endif %}</td>
           <td class="num">{{ file.rules_created }}</td>
           <td class="num">{{ file.rules_updated }}</td>
           <td class="num">{{ file.rules_removed }}</td>
           <td class="num text-muted">{{ file.rules_unchanged }}</td>
+          <td class="num{% if file.rules_skipped %} text-removed{% else %} text-muted{% endif %}"{% if file.rules_skipped %} title="Rules deleted here, left alone"{% endif %}>{{ file.rules_skipped }}</td>
         </tr>
         {% endfor %}
       </tbody>

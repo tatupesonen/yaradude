@@ -24,6 +24,9 @@ htmlcov/
 staticfiles/
 media/
 
+# Scan pipeline working directory (compiled rule set, build lock, sample spool)
+/scan/
+
 # Tailwind standalone CLI binary (fetched per machine, never committed)
 .tailwind/
 

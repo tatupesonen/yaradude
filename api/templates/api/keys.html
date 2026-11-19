@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% load yaradude %}
+{% block title %}API keys{% endblock %}
+{% block content %}
+<div class="grid gap-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
+  {% include "api/includes/sidenav.html" %}
+  <div class="flex min-w-0 flex-col gap-5">
+    <div>
+      <h1>API keys</h1>
+      <p class="mt-0.5 max-w-3xl text-sm text-muted">Personal keys for scripts using the <a href="{% url 'api:docs' %}">API</a>. A key acts as you, with your role's permissions. Only a hash is stored: a key is shown once, when you create it, and cannot be shown again. Revoke a key you no longer use or may have leaked.</p>
+    </div>
+
+    {% if secret %}
+    <section class="alert alert-success flex-col items-stretch" role="status" aria-labelledby="new-key-heading">
+      <h2 id="new-key-heading" class="text-base">Your new key “{{ new_key.name }}”</h2>
+      <p>Copy it now: it will not be shown again. Treat it like a password.</p>
+      <div class="mt-1 flex flex-wrap items-start gap-2">
+        <div class="code-block min-w-0 flex-1 bg-surface"><pre id="new-key"><code>{{ secret }}</code></pre></div>
+        <button type="button" class="btn btn-primary" data-copy="#new-key" hidden>Copy key</button>
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="card" aria-labelledby="create-heading">
+      <div class="card-header"><h2 id="create-heading">Create a key</h2></div>
+      <form method="post" class="card-body grid gap-4 sm:grid-cols-[minmax(12rem,2fr)_minmax(9rem,1fr)_auto] sm:items-end">
+        {% csrf_token %}
+        {% if form.non_field_errors %}<p class="field-error sm:col-span-3" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+        <div>
+          <label class="label" for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
+          {{ form.name }}
+          {% if form.name.errors %}<p class="field-error" role="alert">{{ form.name.errors|join:" " }}</p>{% endif %}
+        </div>
+        <div>
+          <label class="label" for="{{ form.expires.id_for_label }}">{{ form.expires.label }}</label>
+          {{ form.expires }}
+        </div>
+        <div><button type="submit" class="btn btn-primary">Create key</button></div>
+        <p class="help sm:col-span-3">{{ form.name.help_text }} You can have up to {{ max_keys }} active keys.</p>
+      </form>
+    </section>
+
+    <section class="card" aria-labelledby="keys-heading">
+      <div class="card-header"><h2 id="keys-heading">Your keys</h2></div>
+      {% if api_keys %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Key</th>
+              <th scope="col">Created</th>
+              <th scope="col">Last used</th>
+              <th scope="col">Expires</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for key in api_keys %}
+            <tr>
+              <td>
+                <div class="font-medium">{{ key.name }}</div>
+                <div class="font-mono text-xs text-muted">{{ key.prefix }}_…</div>
+              </td>
+              <td>{{ key.created_at|ts:"short" }}</td>
+              <td>{{ key.last_used_at|ts:"short" }}</td>
+              <td>{% if key.is_revoked %}<span class="badge badge-removed">Revoked</span>{% elif key.is_expired %}<span class="badge badge-warn">Expired</span>{% elif key.expires_at %}{{ key.expires_at|ts:"short" }}{% else %}<span class="text-faint">never</span>{% endif %}</td>
+              <td class="text-right">
+                {% if key.is_usable %}
+                <form method="post" action="{% url 'api:key_revoke' key.pk %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-danger" aria-label="Revoke key {{ key.name }}">Revoke</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="px-4 py-2.5 text-xs text-muted">Last use is recorded at most every few minutes.</p>
+      {% else %}
+      <div class="empty"><p>You have no API keys yet.</p></div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

@@ -1,10 +1,16 @@
 """Shared view helpers."""
 
-from django.contrib.auth.mixins import PermissionRequiredMixin
-from django.core.paginator import Paginator
-from django.http import HttpResponse
-from django.utils.http import content_disposition_header
+from typing import Any
 
+from django.contrib.auth.mixins import PermissionRequiredMixin
+from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
+from django.http import HttpRequest, HttpResponse
+from django.utils.http import content_disposition_header  # ty: ignore[missing-module-member]  # Django 4.2 API absent from django-types 0.24
+
+from accounts.models import User
+from rules.models import Rule
+from rules.services.editing import EditResult
 from rules.services.exporter import ExportFile
 
 PAGE_SIZE = 100
@@ -27,8 +33,26 @@ class PermissionMixin(PermissionRequiredMixin):
         self.load(**kwargs)
         return super().dispatch(request, *args, **kwargs)
 
-    def load(self, **kwargs) -> None:
+    def load(self, **kwargs: Any) -> None:
         """Hook to load the view's object after the permission check."""
+
+
+def current_user(request: HttpRequest) -> User:
+    """
+    The signed-in user. LoginRequiredMiddleware guarantees one for every
+    view of this app; anything else is refused rather than passed on.
+    """
+    user = request.user
+    if not isinstance(user, User):
+        raise PermissionDenied
+    return user
+
+
+def saved_rule(result: EditResult) -> Rule:
+    """The rule of a successful editing result (the services set it whenever `ok`)."""
+    if result.rule is None:
+        raise ValueError("The editing service reported success without a rule.")
+    return result.rule
 
 
 def paginate(request, queryset, per_page: int = PAGE_SIZE):

@@ -102,3 +102,51 @@ class EnsureSuperuserCommandTests(TestCase):
         with self.assertRaisesMessage(CommandError, "DJANGO_SUPERUSER_PASSWORD is required"):
             self.call({"DJANGO_SUPERUSER_USERNAME": "admin"})
         self.assertFalse(User.objects.exists())
+
+    def test_weak_password_is_refused(self) -> None:
+        env = {**self.ENV, "DJANGO_SUPERUSER_PASSWORD": "admin"}
+        with self.assertRaisesMessage(CommandError, "DJANGO_SUPERUSER_PASSWORD is too weak"):
+            self.call(env)
+        self.assertFalse(User.objects.exists())
+
+    def test_password_like_the_username_is_refused(self) -> None:
+        env = {
+            **self.ENV,
+            "DJANGO_SUPERUSER_USERNAME": "rosalind",
+            "DJANGO_SUPERUSER_PASSWORD": "rosalind1",
+        }
+        with self.assertRaises(CommandError):
+            self.call(env)
+
+
+class DeployCheckTests(TestCase):
+    """`check --deploy` is clean with production environment variables (section 11)."""
+
+    def test_check_deploy(self) -> None:
+        import subprocess
+        import sys
+
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("DJANGO_", "YARADUDE_"))
+        }
+        env.update(
+            DJANGO_DEBUG="false",
+            DJANGO_SECRET_KEY="x" * 20 + "-production-like-secret-key-0123456789abcdef",
+            DJANGO_ALLOWED_HOSTS="yaradude.example.test",
+            DJANGO_CSRF_TRUSTED_ORIGINS="https://yaradude.example.test",
+            YARADUDE_DB_PATH=str(
+                Path(self.enterContext(tempfile.TemporaryDirectory())) / "db.sqlite3"
+            ),
+        )
+        result = subprocess.run(
+            [sys.executable, "manage.py", "check", "--deploy", "--fail-level", "WARNING"],
+            cwd=settings.BASE_DIR,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("System check identified no issues", result.stdout)

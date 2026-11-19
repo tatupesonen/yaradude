@@ -60,10 +60,13 @@ class TailwindSettingsTests(SimpleTestCase):
 @unittest.skipUnless(HAS_TAILWIND_CLI, "django-tailwind-cli (dev group) is not installed")
 class TailwindBuildTests(SimpleTestCase):
     def test_missing_binary_fails_fast_without_network(self):
-        with tempfile.TemporaryDirectory() as empty:
-            with override_settings(TAILWIND_CLI_PATH=empty), no_network() as attempts:
-                with self.assertRaises(CommandError) as raised:
-                    call_command("tailwind", "build")
+        with (
+            tempfile.TemporaryDirectory() as empty,
+            override_settings(TAILWIND_CLI_PATH=empty),
+            no_network() as attempts,
+            self.assertRaises(CommandError) as raised,
+        ):
+            call_command("tailwind", "build")
         self.assertIn("download", str(raised.exception).lower())
         self.assertEqual(attempts, [])
 

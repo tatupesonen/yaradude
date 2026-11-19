@@ -20,6 +20,7 @@
 @source "../templatetags";
 @source "../forms.py";
 @source "../views";
+@source "../../api/templates";
 
 /* ---------------------------------------------------------------- tokens */
 

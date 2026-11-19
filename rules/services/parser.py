@@ -5,13 +5,19 @@ This is a small hand-written tokenizer plus a top-level grammar; it does not
 validate rule bodies (the YARA engine does that) but finds rule boundaries
 reliably, which only requires treating strings, regular expressions and
 comments as opaque tokens. See PLAN.md section 2 for the lexical rules.
+
+The parser streams over the text: tokens are small tuples produced lazily,
+whitespace is never materialised, and only a rule's `meta:` section is kept
+as tokens, so memory stays proportional to the text plus the parsed rules
+(PLAN.md section 13, finding 1).
 """
 
 import hashlib
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 
-type MetaValue = str | int | bool
+type MetaValue = str | int | float | bool
 
 
 class RuleParseError(Exception):
@@ -23,9 +29,11 @@ class RuleParseError(Exception):
         self.line = line
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Token:
-    kind: str  # "space", "comment", "string", "regex", "word", "var", "number", "punct"
+    """A token as returned by `tokenize` (whitespace is never returned)."""
+
+    kind: str  # "comment", "string", "regex", "word", "var", "number", "punct"
     text: str
     start: int
     end: int
@@ -39,7 +47,7 @@ class ParsedRule:
     is_private: bool
     is_global: bool
     # The rule text from its first modifier (or its attached leading
-    # comments) through the closing brace.
+    # comments) through the closing brace. Line endings are "\n".
     source: str
     meta: list[tuple[str, MetaValue]]
     # The modules of the file's imports that this rule references, and the
@@ -94,6 +102,17 @@ class ParsedFile:
     rules: list[ParsedRule] = field(default_factory=list)
 
 
+def normalize_newlines(text: str) -> str:
+    """
+    Convert CRLF line endings to LF. This is the one place line endings are
+    normalised: rule sources and their hashes always use "\\n", so a file
+    from disk, the same rule saved from a browser textarea (which submits
+    CRLF) and its hash agree. A lone CR is left alone, because it may be part
+    of a string literal.
+    """
+    return text.replace("\r\n", "\n")
+
+
 def rule_text(imports: list[str], source: str) -> str:
     """The standalone text of one rule: its import lines, a blank line, the rule."""
     if not imports:
@@ -117,38 +136,53 @@ _TOKEN_RE = re.compile(
     | (?P<var>[$#@!]\w*\*?)
     | (?P<number>0x[0-9A-Fa-f]+|0o[0-7]+|\d+(?:\.\d+)?(?:KB|MB)?)
     | (?P<punct>[^\s"/])
+    | (?P<error>["/])
     """,
     re.VERBOSE | re.DOTALL,
 )
 
 _ESCAPES: dict[str, str] = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
-_MODIFIERS: set[str] = {"global", "private"}
+_MODIFIERS: frozenset[str] = frozenset({"global", "private"})
+_HEX_BYTE = re.compile(r"[0-9A-Fa-f]{2}")
+
+# A lexed token: (kind, start, end, line). Its text is `text[start:end]`.
+type _Lexeme = tuple[str, int, int, int]
+
+
+def _lex(text: str) -> Iterator[_Lexeme]:
+    """
+    Yield the non-whitespace tokens of `text` lazily, raising RuleParseError
+    on unterminated literals.
+    """
+    line = 1
+    for match in _TOKEN_RE.finditer(text):
+        kind = match.lastgroup
+        assert kind is not None  # every alternative of _TOKEN_RE is a named group
+        start, end = match.span()
+        if kind == "space":
+            line += text.count("\n", start, end)
+            continue
+        if kind == "error":
+            if text.startswith("/*", start):
+                raise RuleParseError("unterminated comment", line)
+            if text[start] == '"':
+                raise RuleParseError("unterminated string", line)
+            raise RuleParseError("unterminated regular expression", line)
+        yield kind, start, end, line
+        if kind == "comment":
+            line += text.count("\n", start, end)
 
 
 def tokenize(text: str) -> list[Token]:
-    """Split text into tokens, raising RuleParseError on unterminated literals."""
-    tokens: list[Token] = []
-    pos = 0
-    line = 1
-    while pos < len(text):
-        match = _TOKEN_RE.match(text, pos)
-        if match is None:
-            if text.startswith("/*", pos):
-                raise RuleParseError("unterminated comment", line)
-            if text[pos] == '"':
-                raise RuleParseError("unterminated string", line)
-            raise RuleParseError("unterminated regular expression", line)
-        kind = match.lastgroup
-        assert kind is not None  # every alternative of _TOKEN_RE is a named group
-        tokens.append(Token(kind, match.group(), pos, match.end(), line))
-        line += match.group().count("\n")
-        pos = match.end()
-    return tokens
+    """All non-whitespace tokens of `text`; raises RuleParseError on unterminated literals."""
+    return [Token(kind, text[start:end], start, end, line) for kind, start, end, line in _lex(text)]
 
 
 def unescape_string(literal: str, line: int = 0) -> str:
     """Decode a YARA text string literal, including its quotes."""
     body = literal[1:-1]
+    if "\\" not in body:
+        return body
     out: list[str] = []
     i = 0
     while i < len(body):
@@ -161,7 +195,7 @@ def unescape_string(literal: str, line: int = 0) -> str:
         if escape in _ESCAPES:
             out.append(_ESCAPES[escape])
             i += 2
-        elif escape == "x" and re.fullmatch(r"[0-9A-Fa-f]{2}", body[i + 2 : i + 4]):
+        elif escape == "x" and _HEX_BYTE.fullmatch(body, i + 2, i + 4):
             out.append(chr(int(body[i + 2 : i + 4], 16)))
             i += 4
         else:
@@ -169,7 +203,7 @@ def unescape_string(literal: str, line: int = 0) -> str:
     return "".join(out)
 
 
-def _parse_number(text: str, line: int) -> int:
+def _parse_number(text: str, line: int) -> int | float:
     multiplier = 1
     if text.endswith("KB"):
         text, multiplier = text[:-2], 1024
@@ -180,42 +214,89 @@ def _parse_number(text: str, line: int) -> int:
     if text.startswith("0x"):
         return int(text[2:], 16) * multiplier
     if "." in text:
-        raise RuleParseError(f"meta value {text} is not an integer", line)
+        # YARA-X accepts floats in meta, but not with a size suffix.
+        if multiplier != 1:
+            suffix = "KB" if multiplier == 1024 else "MB"
+            raise RuleParseError(f"invalid meta value {text}{suffix}", line)
+        return float(text)
     return int(text) * multiplier
+
+
+@dataclass(frozen=True, slots=True)
+class _Significant:
+    """A non-comment token with the start of the comment run attached above it."""
+
+    kind: str
+    text: str
+    start: int
+    end: int
+    line: int
+    attached_start: int
+    attached_line: int
+
+
+def _significant(text: str) -> Iterator[_Significant]:
+    """
+    The grammar's tokens (no comments), each carrying where its attached
+    leading comments start: the run of comments directly above it, each
+    starting its own line, with no blank line between them or before the
+    token. Without such comments that is the token itself.
+    """
+    previous_end = 0
+    seen_any = False
+    run: tuple[int, int] | None = None  # (offset, line) of the current comment run
+    for kind, start, end, line in _lex(text):
+        gap_newlines = text.count("\n", previous_end, start)
+        if kind == "comment":
+            starts_line = not seen_any or gap_newlines > 0
+            if not starts_line:
+                run = None
+            elif run is None or gap_newlines > 1:
+                run = (start, line)
+        else:
+            if run is not None and gap_newlines <= 1:
+                attached_start, attached_line = run
+            else:
+                attached_start, attached_line = start, line
+            yield _Significant(
+                kind, text[start:end], start, end, line, attached_start, attached_line
+            )
+            run = None
+        previous_end = end
+        seen_any = True
 
 
 class _Parser:
     def __init__(self, text: str) -> None:
         self.text = text
-        self.tokens = tokenize(text)
-        # Indexes into self.tokens of the significant (non-space, non-comment)
-        # tokens, which is what the grammar looks at.
-        self.significant = [
-            i for i, token in enumerate(self.tokens) if token.kind not in ("space", "comment")
-        ]
-        self.pos = 0
+        self.tokens = _significant(text)
+        self.lookahead: _Significant | None = None
+        self.last_line = 1
+        self.advance()
 
-    def peek(self) -> Token | None:
-        if self.pos < len(self.significant):
-            return self.tokens[self.significant[self.pos]]
-        return None
+    def advance(self) -> None:
+        self.lookahead = next(self.tokens, None)
+        if self.lookahead is not None:
+            self.last_line = self.lookahead.line
 
-    def next(self, expected: str) -> Token:
-        token = self.peek()
+    def peek(self) -> _Significant | None:
+        return self.lookahead
+
+    def next(self, expected: str) -> _Significant:
+        token = self.lookahead
         if token is None:
-            last_line = self.tokens[-1].line if self.tokens else 1
-            raise RuleParseError(f"unexpected end of file, expected {expected}", last_line)
-        self.pos += 1
+            raise RuleParseError(f"unexpected end of file, expected {expected}", self.last_line)
+        self.advance()
         return token
 
     def parse(self) -> ParsedFile:
         imports: dict[str, int] = {}
         includes: list[str] = []
-        rules: list[ParsedRule] = []
+        rules: list[tuple[ParsedRule, set[str]]] = []
         seen: set[str] = set()
         while (token := self.peek()) is not None:
             if token.kind == "word" and token.text in ("import", "include"):
-                self.pos += 1
+                self.advance()
                 literal = self.next("a string")
                 if literal.kind != "string":
                     raise RuleParseError(f"expected a string after {token.text}", literal.line)
@@ -225,22 +306,26 @@ class _Parser:
                 else:
                     imports.setdefault(value, token.line)
             elif token.kind == "word" and (token.text == "rule" or token.text in _MODIFIERS):
-                rule = self.parse_rule()
+                rule, referenced = self.parse_rule()
                 if rule.name in seen:
                     raise RuleParseError(f'duplicate rule identifier "{rule.name}"', rule.line)
                 seen.add(rule.name)
-                rules.append(rule)
+                rules.append((rule, referenced))
             else:
                 raise RuleParseError(f'unexpected "{token.text}"', token.line)
-        rules = [self.with_imports(rule, imports) for rule in rules]
-        return ParsedFile(imports=list(imports), includes=includes, rules=rules)
+        return ParsedFile(
+            imports=list(imports),
+            includes=includes,
+            rules=[_with_imports(rule, referenced, imports) for rule, referenced in rules],
+        )
 
-    def parse_rule(self) -> ParsedRule:
-        first_index = self.significant[self.pos]
-        first = self.tokens[first_index]
+    def parse_rule(self) -> tuple[ParsedRule, set[str]]:
+        first = self.next('"rule"')
+        token = first
         modifiers: set[str] = set()
-        while (token := self.next('"rule"')).text in _MODIFIERS:
+        while token.text in _MODIFIERS:
             modifiers.add(token.text)
+            token = self.next('"rule"')
         if token.text != "rule":
             raise RuleParseError(f'expected "rule", got "{token.text}"', token.line)
         name_token = self.next("a rule name")
@@ -257,116 +342,113 @@ class _Parser:
         if token.text != "{":
             raise RuleParseError(f'expected "{{", got "{token.text}"', token.line)
 
-        body_start = self.pos
+        # Walk the body once: count braces, keep the tokens of a leading
+        # `meta:` section, and collect the names used before a "." that is
+        # not itself preceded by "." (the candidates for module references).
+        meta_tokens: list[_Significant] = []
+        in_meta: bool | None = None  # None until the first body token
+        referenced: set[str] = set()
+        before_previous: _Significant | None = None
+        previous: _Significant = token
         depth = 1
-        while depth:
+        while True:
             token = self.peek()
             if token is None:
                 raise RuleParseError(f'unterminated rule "{name_token.text}"', first.line)
-            self.pos += 1
-            if token.text == "{":
+            self.advance()
+            text = token.text
+            if text == "{":
                 depth += 1
-            elif token.text == "}":
+            elif text == "}":
                 depth -= 1
-        body = [self.tokens[i] for i in self.significant[body_start : self.pos - 1]]
-        closing = token
+                if not depth:
+                    break
+            elif (
+                text == "."
+                and previous.kind == "word"
+                and (before_previous is None or before_previous.text != ".")
+            ):
+                referenced.add(previous.text)
+            if in_meta is None:
+                in_meta = text == "meta"
+            if in_meta:
+                if text == ":" and previous.text in ("strings", "condition") and meta_tokens:
+                    # `strings:` / `condition:` ends the meta section; drop
+                    # its keyword, which was collected as a would-be key.
+                    meta_tokens.pop()
+                    in_meta = False
+                else:
+                    meta_tokens.append(token)
+            before_previous, previous = previous, token
 
-        start = self.tokens[self.attached_comment_start(first_index)]
-        return ParsedRule(
+        rule = ParsedRule(
             name=name_token.text,
             tags=tags,
             is_private="private" in modifiers,
             is_global="global" in modifiers,
-            source=self.text[start.start : closing.end],
-            meta=self.parse_meta(body),
+            source=self.text[first.attached_start : token.end],
+            meta=_parse_meta(meta_tokens),
             imports=[],
             import_lines=[],
             line=first.line,
-            source_line=start.line,
+            source_line=first.attached_line,
         )
+        return rule, referenced
 
-    def attached_comment_start(self, index: int) -> int:
-        """
-        Index of the first token of the comment run directly above the token
-        at `index`: comments separated from it and from each other by no blank
-        line, each starting its own line.
-        """
-        start = index
-        i = index - 1
-        while i >= 0:
-            token = self.tokens[i]
-            if token.kind == "space":
-                if token.text.count("\n") > 1:
-                    break
-            elif token.kind == "comment" and self.starts_line(i):
-                start = i
-            else:
-                break
-            i -= 1
-        return start
 
-    def starts_line(self, index: int) -> bool:
-        if index == 0:
-            return True
-        previous = self.tokens[index - 1]
-        return previous.kind == "space" and ("\n" in previous.text or index == 1)
+def _parse_meta(body: list[_Significant]) -> list[tuple[str, MetaValue]]:
+    """Parse the tokens of a `meta:` section (starting with `meta`, `:`)."""
+    if len(body) < 2 or body[0].text != "meta" or body[1].text != ":":
+        return []
+    meta: list[tuple[str, MetaValue]] = []
+    i = 2
+    while i < len(body):
+        key = body[i]
+        if key.kind != "word":
+            raise RuleParseError(f'invalid meta identifier "{key.text}"', key.line)
+        if i + 2 >= len(body) or body[i + 1].text != "=":
+            raise RuleParseError(f'expected "=" after meta identifier "{key.text}"', key.line)
+        value_token = body[i + 2]
+        i += 3
+        value: MetaValue
+        if value_token.kind == "string":
+            value = unescape_string(value_token.text, value_token.line)
+        elif value_token.kind == "number":
+            value = _parse_number(value_token.text, value_token.line)
+        elif value_token.text in ("true", "false"):
+            value = value_token.text == "true"
+        elif value_token.text == "-" and i < len(body) and body[i].kind == "number":
+            value = -_parse_number(body[i].text, body[i].line)
+            i += 1
+        else:
+            raise RuleParseError(
+                f'invalid value for meta "{key.text}": "{value_token.text}"',
+                value_token.line,
+            )
+        meta.append((key.text, value))
+    return meta
 
-    @staticmethod
-    def parse_meta(body: list[Token]) -> list[tuple[str, MetaValue]]:
-        """Parse the `meta:` section, which can only open a rule body."""
-        if len(body) < 2 or body[0].text != "meta" or body[1].text != ":":
-            return []
-        meta: list[tuple[str, MetaValue]] = []
-        i = 2
-        while i < len(body):
-            key = body[i]
-            if (
-                key.text in ("strings", "condition")
-                and i + 1 < len(body)
-                and body[i + 1].text == ":"
-            ):
-                break
-            if key.kind != "word":
-                raise RuleParseError(f'invalid meta identifier "{key.text}"', key.line)
-            if i + 2 >= len(body) or body[i + 1].text != "=":
-                raise RuleParseError(f'expected "=" after meta identifier "{key.text}"', key.line)
-            value_token = body[i + 2]
-            i += 3
-            if value_token.kind == "string":
-                value = unescape_string(value_token.text, value_token.line)
-            elif value_token.kind == "number":
-                value = _parse_number(value_token.text, value_token.line)
-            elif value_token.text in ("true", "false"):
-                value = value_token.text == "true"
-            elif value_token.text == "-" and i < len(body) and body[i].kind == "number":
-                value = -_parse_number(body[i].text, body[i].line)
-                i += 1
-            else:
-                raise RuleParseError(
-                    f'invalid value for meta "{key.text}": "{value_token.text}"',
-                    value_token.line,
-                )
-            meta.append((key.text, value))
-        return meta
 
-    @staticmethod
-    def with_imports(rule: ParsedRule, imports: dict[str, int]) -> ParsedRule:
-        """Copy of `rule` listing the imported modules its source references."""
-        if not imports:
-            return rule
-        used = [module for module in imports if module in referenced_names(rule.source)]
-        return replace(rule, imports=used, import_lines=[imports[module] for module in used])
+def _with_imports(rule: ParsedRule, referenced: set[str], imports: dict[str, int]) -> ParsedRule:
+    """Copy of `rule` listing the imported modules its source references."""
+    if not imports:
+        return rule
+    used = [module for module in imports if module in referenced]
+    if not used:
+        return rule
+    return replace(rule, imports=used, import_lines=[imports[module] for module in used])
 
 
 def parse(text: str) -> ParsedFile:
     """
-    Split a YARA file into its imports, includes and rules.
+    Split a YARA file into its imports, includes and rules. CRLF line endings
+    are normalised to LF first (`normalize_newlines`).
 
     Raises RuleParseError for unterminated strings, regular expressions,
     comments or rules, unexpected top-level tokens, invalid meta values and
     duplicate rule identifiers.
     """
-    return _Parser(text).parse()
+    return _Parser(normalize_newlines(text)).parse()
 
 
 def referenced_names(source: str) -> set[str]:
@@ -374,14 +456,22 @@ def referenced_names(source: str) -> set[str]:
     Identifiers used as the start of a dotted expression, such as `pe` in
     `pe.is_pe`: the candidates for module references.
     """
-    tokens = [t for t in tokenize(source) if t.kind not in ("space", "comment")]
-    return {
-        token.text
-        for i, token in enumerate(tokens[:-1])
-        if token.kind == "word"
-        and tokens[i + 1].text == "."
-        and (i == 0 or tokens[i - 1].text != ".")
-    }
+    names: set[str] = set()
+    before_previous: _Lexeme | None = None
+    previous: _Lexeme | None = None
+    for token in _lex(source):
+        kind, start, end, _ = token
+        if kind == "comment":
+            continue
+        if (
+            previous is not None
+            and source[start:end] == "."
+            and previous[0] == "word"
+            and (before_previous is None or source[before_previous[1] : before_previous[2]] != ".")
+        ):
+            names.add(source[previous[1] : previous[2]])
+        before_previous, previous = previous, token
+    return names
 
 
 def parse_rule_text(text: str) -> ParsedRule:
@@ -402,7 +492,7 @@ def parse_rule_text(text: str) -> ParsedRule:
 
 
 def _line_of(text: str, word: str) -> int:
-    for token in tokenize(text):
-        if token.kind == "word" and token.text == word:
-            return token.line
+    for kind, start, end, line in _lex(text):
+        if kind == "word" and text[start:end] == word:
+            return line
     return 1

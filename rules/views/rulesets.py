@@ -1,3 +1,5 @@
+from typing import Any
+
 from django.contrib import messages
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect
@@ -7,7 +9,7 @@ from django.views.generic import TemplateView, View
 from rules.forms import RulesetFilterForm
 from rules.models import Rule, Ruleset
 from rules.services import editing, exporter
-from rules.views.base import PermissionMixin, file_response, paginate
+from rules.views.base import PermissionMixin, current_user, file_response, paginate
 
 SORTS = {
     "name": ["name", "pk"],
@@ -16,14 +18,18 @@ SORTS = {
     "rules": ["active_count", "name", "pk"],
 }
 
-ACTIVE = Q(rules__removed_at__isnull=True)
+# Joins do not apply the default manager, so deleted rules are excluded
+# explicitly (PLAN.md 5.7, "Deleted rows").
+NOT_DELETED = Q(rules__deleted_at__isnull=True)
+ACTIVE = NOT_DELETED & Q(rules__removed_at__isnull=True)
+REMOVED = NOT_DELETED & Q(rules__removed_at__isnull=False)
 
 
 def with_counts(queryset):
     return queryset.annotate(
         active_count=Count("rules", filter=ACTIVE),
         failing_count=Count("rules", filter=ACTIVE & ~Q(rules__compile_error="")),
-        removed_count=Count("rules", filter=~ACTIVE),
+        removed_count=Count("rules", filter=REMOVED),
     )
 
 
@@ -101,9 +107,9 @@ class RulesetDeleteView(PermissionMixin, TemplateView):
     permission_required = "rules.delete_ruleset"
     template_name = "rules/ruleset_confirm_delete.html"
 
-    def load(self, pk, **kwargs):
+    def load(self, **kwargs: Any) -> None:
         self.ruleset = get_object_or_404(
-            with_counts(Ruleset.objects.defer("original_content")), pk=pk
+            with_counts(Ruleset.objects.defer("original_content")), pk=kwargs["pk"]
         )
 
     def get_context_data(self, **kwargs):
@@ -111,6 +117,10 @@ class RulesetDeleteView(PermissionMixin, TemplateView):
 
     def post(self, request, pk):
         name = self.ruleset.name
-        editing.delete_ruleset(self.ruleset)
-        messages.success(request, f"Deleted ruleset {name} with its rules and their history.")
+        editing.delete_ruleset(self.ruleset, user=current_user(request))
+        messages.success(
+            request,
+            f"Deleted ruleset {name} with its rules. They are hidden, not destroyed: they are "
+            "kept with their history and can be restored.",
+        )
         return redirect(reverse("rules:ruleset_list"))

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% load api_docs %}
+{% block title %}API: {{ group }}{% endblock %}
+{% block content %}
+<div class="grid gap-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
+  {% include "api/includes/sidenav.html" %}
+  <div class="flex min-w-0 flex-col gap-5">
+    <div>
+      <nav aria-label="Breadcrumb" class="mb-1 text-sm text-muted"><a href="{% url 'api:docs' %}">API</a></nav>
+      <h1>{{ group }}</h1>
+      <p class="mt-0.5 max-w-3xl text-sm text-muted">{{ intro|ticks }} Every example reads your key from <code>YARADUDE_API_KEY</code> (<a href="{% url 'api:keys' %}">create one</a>); the Python examples use <a href="{% url 'api:docs_client' %}">yaradude_client.py</a>. Ids in the examples are placeholders.</p>
+    </div>
+
+    <nav aria-label="Endpoints in {{ group }}" class="card card-body">
+      <ul class="flex flex-col gap-1 text-sm">
+        {% for item in documented %}
+        <li><a href="#{{ item.endpoint.anchor }}"><span class="inline-block w-14 font-mono text-xs font-semibold">{{ item.endpoint.method }}</span>{{ item.endpoint.summary }}</a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+
+    {% for item in documented %}{% with e=item.endpoint ex=item.example %}
+    <section class="card scroll-mt-4" id="{{ e.anchor }}" aria-labelledby="{{ e.anchor }}-heading">
+      <div class="card-header">
+        <h2 id="{{ e.anchor }}-heading">{{ e.summary }}</h2>
+        {% if item.allowed %}<span class="badge badge-ok">Your role can use this</span>{% else %}<span class="badge badge-neutral">Not with your role</span>{% endif %}
+      </div>
+      <div class="card-body flex flex-col gap-4 text-sm">
+        <p class="font-mono break-all"><span class="font-semibold text-accent-strong">{{ e.method }}</span> {{ item.full_path }}</p>
+        {% if e.description %}<p>{{ e.description|ticks }}</p>{% endif %}
+        <dl class="meta-list">
+          <dt>Permission</dt>
+          <dd>{{ item.who }}{% if e.permissions %} <span class="text-xs text-muted">({% for p in e.permissions %}<code>{{ p }}</code>{% if not forloop.last %}, {% endif %}{% endfor %})</span>{% endif %}</dd>
+          {% if e.path_params %}
+          <dt>Path</dt>
+          <dd>{% for name, converter in e.path_param_types %}<code>{{ name }}</code> ({% if converter == 'uuid' %}UUID{% else %}integer{% endif %}){% if not forloop.last %}, {% endif %}{% endfor %}</dd>
+          {% endif %}
+        </dl>
+
+        {% if e.params %}
+        <div>
+          <h3 class="mb-1.5">Query parameters</h3>
+          <div class="table-wrap rounded-md border border-line">
+            <table class="data-table">
+              <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+              <tbody>
+                {% for p in e.params %}
+                <tr>
+                  <td class="font-mono">{{ p.name }}</td>
+                  <td class="text-muted">{{ p.type }}{% if p.repeated %}, repeatable{% endif %}</td>
+                  <td>{{ p.description|ticks }}{% if p.enum %}<div class="mt-0.5 text-xs text-muted">One of {% for value in p.enum %}<code>{{ value }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}</div>{% endif %}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if e.body %}
+        <div>
+          <h3 class="mb-1.5">Body <span class="text-xs font-normal text-muted">{% if e.body.kind == 'json' %}application/json{% else %}multipart/form-data{% endif %}</span></h3>
+          <div class="table-wrap rounded-md border border-line">
+            <table class="data-table">
+              <thead><tr><th scope="col">Field</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+              <tbody>
+                {% for f in e.body.fields %}
+                <tr>
+                  <td class="font-mono">{{ f.name }}{% if f.required %} <span class="text-xs text-error">required</span>{% endif %}</td>
+                  <td class="text-muted">{% if f.repeated and e.body.kind == 'json' %}array of {{ f.type }}{% else %}{{ f.type }}{% if f.repeated %}, repeatable{% endif %}{% endif %}</td>
+                  <td>{{ f.description|ticks }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %}
+
+        <div>
+          <h3 class="mb-1.5">Responses</h3>
+          <ul class="flex flex-col gap-1">
+            {% for r in e.replies %}<li><code class="font-semibold">{{ r.status }}</code> {{ r.description|ticks }}</li>{% endfor %}
+          </ul>
+        </div>
+
+        <div class="grid gap-3 xl:grid-cols-2">
+          <div class="min-w-0">
+            <div class="mb-1.5 flex items-center justify-between gap-2"><h3>curl</h3><button type="button" class="btn btn-sm" data-copy="#curl-{{ e.anchor }}" hidden>Copy</button></div>
+            <div class="code-block"><pre id="curl-{{ e.anchor }}"><code>{{ ex.curl }}</code></pre></div>
+          </div>
+          <div class="min-w-0">
+            <div class="mb-1.5 flex items-center justify-between gap-2"><h3>Python</h3><button type="button" class="btn btn-sm" data-copy="#py-{{ e.anchor }}" hidden>Copy</button></div>
+            <div class="code-block"><pre id="py-{{ e.anchor }}"><code>{{ ex.python }}</code></pre></div>
+          </div>
+        </div>
+        <details>
+          <summary class="cursor-pointer font-medium text-accent">Example response <span class="font-mono text-muted">{{ ex.response_status }}</span></summary>
+          <div class="code-block mt-1.5 max-h-96 overflow-y-auto"><pre><code>{{ ex.response }}</code></pre></div>
+        </details>
+      </div>
+    </section>
+    {% endwith %}{% endfor %}
+  </div>
+</div>
+{% endblock %}

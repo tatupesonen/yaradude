@@ -127,6 +127,48 @@ class ExporterTests(TestCase):
                 self.assertEqual(ruleset_filename(ruleset, keep_directories=keep), expected)
 
 
+class ExportInjectionTests(TestCase):
+    """Review finding 9: names and paths cannot inject text or odd member names."""
+
+    def test_section_comment_cannot_inject_rules(self) -> None:
+        evil = "x\nrule injected { condition: true }\r\u2028// "
+        ruleset = make_ruleset("rule real { condition: filesize > 0 }", name=evil)
+        ruleset.path = "a\nrule injected2 { condition: true }"
+        ruleset.save()
+        text = export_combined(Rule.objects.select_related("ruleset")).content.decode()
+        self.assertEqual(compiled_identifiers(text), ["real"])
+        section = [line for line in text.splitlines() if line.startswith("// ----")]
+        self.assertEqual(len(section), 1)
+        self.assertIn("rule injected { condition: true }", section[0])
+
+    def test_member_names_are_safe(self) -> None:
+        cases = [
+            (Ruleset.Origin.DIRECTORY, "a\\..\\..\\evil.yar", True, "a_.._.._evil.yar"),
+            (Ruleset.Origin.DIRECTORY, "dir/../../x\ny.yar", True, "dir/x_y.yar"),
+            (Ruleset.Origin.DIRECTORY, "C:/windows/x.yar", True, "C_/windows/x.yar"),
+            (Ruleset.Origin.UPLOAD, "..\\..\\up.yar", False, ".._.._up.yar"),
+            (Ruleset.Origin.MANUAL, "..", False, "ruleset-None.yar"),
+        ]
+        for origin, path, keep, expected in cases:
+            with self.subTest(path=path):
+                ruleset = Ruleset(origin=origin, path=path, name=path)
+                name = ruleset_filename(ruleset, keep_directories=keep)
+                self.assertEqual(name, expected)
+                self.assertNotIn("\\", name)
+                self.assertFalse(any(part in ("", ".", "..") for part in name.split("/")))
+
+    def test_zip_member_names_from_hostile_paths(self) -> None:
+        make_ruleset(
+            "rule m { condition: filesize > 4 }",
+            name="..\\..\\x\n.yar",
+            origin=Ruleset.Origin.DIRECTORY,
+        )
+        archive = zipfile.ZipFile(
+            io.BytesIO(export_zip(Rule.objects.select_related("ruleset")).content)
+        )
+        self.assertEqual(archive.namelist(), [".._.._x_.yar"])
+
+
 class HighlightTests(SimpleTestCase):
     def test_highlight(self) -> None:
         html = highlight_yara('rule a {\n  strings: $a = "<script>"\n  condition: $a\n}')

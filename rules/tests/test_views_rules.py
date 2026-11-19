@@ -1,16 +1,20 @@
 import io
 import zipfile
+from unittest import mock
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
-from rules.models import Rule, RuleVersion, Ruleset
-from rules.services import editing
+from rules.models import Rule, Ruleset, RuleVersion
+from rules.services import editing, search
 from rules.tests.helpers import make_ruleset
 from rules.tests.test_views_common import ViewTestCase
 
-NEW_RULE = 'rule fresh_rule : fresh\n{\n    strings:\n        $a = "fresh"\n    condition:\n        $a\n}\n'
+NEW_RULE = (
+    'rule fresh_rule : fresh\n{\n    strings:\n        $a = "fresh"\n'
+    "    condition:\n        $a\n}\n"
+)
 
 
 class RuleListTests(ViewTestCase):
@@ -56,7 +60,9 @@ class RuleListTests(ViewTestCase):
         Rule.objects.filter(pk=self.broken.pk).update(
             compile_error="", compile_warnings=["warning: slow"]
         )
-        self.assertEqual(self.names(self.client.get(self.url, {"status": "modified"})), ["hello_world"])
+        self.assertEqual(
+            self.names(self.client.get(self.url, {"status": "modified"})), ["hello_world"]
+        )
         self.assertEqual(self.names(self.client.get(self.url, {"status": "removed"})), ["pe_rule"])
         self.assertEqual(
             self.names(self.client.get(self.url, {"status": "warnings"})), ["broken_rule"]
@@ -74,7 +80,9 @@ class RuleListTests(ViewTestCase):
             ["pe_rule", "hello_world", "broken_rule"],
         )
         Rule.objects.filter(pk=self.broken.pk).update(updated_at="2020-01-01T00:00:00Z")
-        self.assertEqual(self.names(self.client.get(self.url, {"sort": "updated"}))[0], "broken_rule")
+        self.assertEqual(
+            self.names(self.client.get(self.url, {"sort": "updated"}))[0], "broken_rule"
+        )
 
     def test_invalid_parameters_fall_back_to_defaults(self):
         response = self.client.get(
@@ -213,7 +221,9 @@ class RuleEditorTests(ViewTestCase):
             reverse("rules:rule_create"), {"ruleset": "new", "text": NEW_RULE, "action": "save"}
         )
         self.assertEqual(response.status_code, 200)
-        self.assertFormError(response.context["form"], "new_ruleset", "Name the new collection.")
+        self.assertFormError(  # ty: ignore[missing-argument]  # Django 4.1+ signature (form, field, errors); django-types 0.24 has the old one
+            response.context["form"], "new_ruleset", "Name the new collection."
+        )
 
     def test_invalid_rule_in_new_collection_creates_nothing(self):
         response = self.client.post(
@@ -226,7 +236,8 @@ class RuleEditorTests(ViewTestCase):
     def test_save_refused_when_rule_does_not_compile(self):
         text = "rule bad_one { condition: nope_nope }"
         response = self.client.post(
-            reverse("rules:rule_create"), {"ruleset": self.ruleset.pk, "text": text, "action": "save"}
+            reverse("rules:rule_create"),
+            {"ruleset": self.ruleset.pk, "text": text, "action": "save"},
         )
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.context["result"].ok)
@@ -237,13 +248,18 @@ class RuleEditorTests(ViewTestCase):
     def test_name_clash_refused(self):
         response = self.client.post(
             reverse("rules:rule_create"),
-            {"ruleset": self.ruleset.pk, "text": "rule pe_rule { condition: true }", "action": "save"},
+            {
+                "ruleset": self.ruleset.pk,
+                "text": "rule pe_rule { condition: true }",
+                "action": "save",
+            },
         )
         self.assertContains(response, "already exists")
 
     def test_empty_text_is_a_form_error(self):
         response = self.client.post(
-            reverse("rules:rule_create"), {"ruleset": self.ruleset.pk, "text": "  ", "action": "save"}
+            reverse("rules:rule_create"),
+            {"ruleset": self.ruleset.pk, "text": "  ", "action": "save"},
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context["form"].errors)
@@ -281,7 +297,8 @@ class RuleEditorTests(ViewTestCase):
             {"text": self.hello.text.replace("hello world", "yo"), "version": 1, "action": "save"},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "was changed (now version 2)")
+        self.assertContains(response, "someone else changed this rule")
+        self.assertEqual(response.context["conflict"]["current"], 2)
         self.hello.refresh_from_db()
         self.assertEqual(self.hello.version, 2)
 
@@ -303,7 +320,9 @@ class RuleEditorTests(ViewTestCase):
 
     def test_restore(self):
         editing.update_rule(self.hello, self.hello.text.replace("hello world", "hi"))
-        response = self.client.post(reverse("rules:rule_restore", args=[self.hello.pk, 1]))
+        response = self.client.post(
+            reverse("rules:rule_restore", args=[self.hello.pk, 1]), {"version": 2}
+        )
         self.assertRedirects(response, self.hello.get_absolute_url())
         self.hello.refresh_from_db()
         self.assertEqual(self.hello.version, 3)
@@ -319,7 +338,7 @@ class RuleEditorTests(ViewTestCase):
         )
         editing.update_rule(self.hello, self.hello.text.replace("hello world", "hi"))
         response = self.client.post(
-            reverse("rules:rule_restore", args=[self.hello.pk, 1]), follow=True
+            reverse("rules:rule_restore", args=[self.hello.pk, 1]), {"version": 2}, follow=True
         )
         self.assertContains(response, "cannot be restored")
         self.hello.refresh_from_db()
@@ -328,12 +347,24 @@ class RuleEditorTests(ViewTestCase):
     def test_delete_confirmation_and_delete(self):
         url = reverse("rules:rule_delete", args=[self.hello.pk])
         response = self.client.get(url)
-        self.assertContains(response, "cannot be undone")
-        self.assertContains(response, "version history" if False else "of its history")
-        response = self.client.post(url)
+        # Deletes are recoverable (PLAN.md 12.11): the page must not claim otherwise.
+        self.assertContains(response, "It is not destroyed")
+        self.assertContains(response, "can be restored")
+        self.assertNotContains(response, "cannot be undone")
+        self.assertNotContains(response, "Permanently")
+        response = self.client.post(url, follow=True)
         self.assertRedirects(response, self.ruleset.get_absolute_url())
+        self.assertContains(response, "hidden, not destroyed")
         self.assertFalse(Rule.objects.filter(pk=self.hello.pk).exists())
-        self.assertFalse(RuleVersion.objects.filter(rule_id=self.hello.pk).exists())
+        deleted = Rule.all_objects.get(pk=self.hello.pk)
+        self.assertEqual(deleted.deleted_by, self.editor)
+        self.assertTrue(RuleVersion.objects.filter(rule_id=self.hello.pk).exists())
+        # Its version pages are gone with it, as is restoring one of them.
+        version_url = reverse("rules:rule_version", args=[self.hello.pk, 1])
+        self.assertEqual(self.client.get(version_url).status_code, 404)
+        restore_url = reverse("rules:rule_restore", args=[self.hello.pk, 1])
+        self.assertEqual(self.client.post(restore_url, {"version": 1}).status_code, 404)
+        self.assertEqual(self.client.get(self.hello.get_absolute_url()).status_code, 404)
 
 
 class ExportTests(ViewTestCase):
@@ -344,7 +375,8 @@ class ExportTests(ViewTestCase):
 
     def test_export_selected_as_yar(self):
         response = self.client.post(
-            self.url, {"scope": "selected", "format": "yar", "ids": [self.hello.pk, self.pe_rule.pk]}
+            self.url,
+            {"scope": "selected", "format": "yar", "ids": [self.hello.pk, self.pe_rule.pk]},
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("attachment", response["Content-Disposition"])
@@ -355,9 +387,7 @@ class ExportTests(ViewTestCase):
         self.assertIn('import "pe"', text)
 
     def test_export_filter_as_zip(self):
-        response = self.client.post(
-            self.url, {"scope": "filter", "format": "zip", "tag": "demo"}
-        )
+        response = self.client.post(self.url, {"scope": "filter", "format": "zip", "tag": "demo"})
         self.assertEqual(response["Content-Type"], "application/zip")
         with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
             (name,) = archive.namelist()
@@ -385,3 +415,425 @@ class ExportTests(ViewTestCase):
     def test_invalid_request_is_404(self):
         response = self.client.post(self.url, {"scope": "bogus"})
         self.assertEqual(response.status_code, 404)
+
+
+class ReviewFixTests(ViewTestCase):
+    def setUp(self):
+        self.login(self.editor)
+
+    def test_collection_name_rejects_control_characters(self):
+        for name in ("evil\nrule x { condition: true }", "tab\there", "nul\x00", "ls x"):
+            with self.subTest(name=repr(name)):
+                response = self.client.post(
+                    reverse("rules:rule_create"),
+                    {"ruleset": "new", "new_ruleset": name, "text": NEW_RULE, "action": "save"},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.context["form"].errors)
+        self.assertFalse(Rule.objects.filter(name="fresh_rule").exists())
+        self.assertFalse(Ruleset.objects.filter(origin=Ruleset.Origin.MANUAL).exists())
+
+    def test_collection_name_is_trimmed_and_limited(self):
+        response = self.client.post(
+            reverse("rules:rule_create"),
+            {"ruleset": "new", "new_ruleset": "x" * 101, "text": NEW_RULE, "action": "save"},
+        )
+        self.assertTrue(response.context["form"].errors)
+        self.client.post(
+            reverse("rules:rule_create"),
+            {"ruleset": "new", "new_ruleset": "  Trimmed  ", "text": NEW_RULE, "action": "save"},
+        )
+        self.assertTrue(Ruleset.objects.filter(name="Trimmed").exists())
+
+    def test_validate_in_new_collection_creates_nothing(self):
+        response = self.client.post(
+            reverse("rules:rule_create"),
+            {"ruleset": "new", "new_ruleset": "Scratch", "text": NEW_RULE, "action": "validate"},
+        )
+        self.assertTrue(response.context["result"].ok)
+        self.assertFalse(Ruleset.objects.filter(name="Scratch").exists())
+
+    def test_create_form_offers_only_manual_collections_and_the_chosen_ruleset(self):
+        manual = make_ruleset("rule m { condition: true }", name="Manual one")
+        response = self.client.get(reverse("rules:rule_create"))
+        choices = dict(response.context["form"].fields["ruleset"].choices)
+        self.assertIn(str(manual.pk), choices)
+        self.assertNotIn(str(self.ruleset.pk), choices)  # an uploaded file
+        response = self.client.get(reverse("rules:rule_create"), {"ruleset": self.ruleset.pk})
+        self.assertIn(
+            str(self.ruleset.pk), dict(response.context["form"].fields["ruleset"].choices)
+        )
+
+
+class ScalingTests(ViewTestCase):
+    def setUp(self):
+        self.login(self.viewer)
+
+    def test_list_query_carries_no_large_columns(self):
+        with CaptureQueriesContext(connection) as queries:
+            self.client.get(reverse("rules:rule_list"), {"page": 1})
+        rows = [
+            q["sql"] for q in queries if 'FROM "rules_rule"' in q["sql"] and "LIMIT" in q["sql"]
+        ]
+        self.assertTrue(rows)
+        for sql in rows:
+            self.assertNotIn("original_content", sql)
+            self.assertNotIn('"rules_rule"."source"', sql)
+
+    def test_default_sort_is_by_indexed_name_and_id(self):
+        with CaptureQueriesContext(connection) as queries:
+            self.client.get(reverse("rules:rule_list"))
+        (sql,) = [
+            q["sql"] for q in queries if 'FROM "rules_rule"' in q["sql"] and "LIMIT" in q["sql"]
+        ]
+        self.assertIn('ORDER BY "rules_rule"."name" ASC, "rules_rule"."id" ASC LIMIT', sql, sql)
+
+    def test_ruleset_filter_is_a_path_field_not_a_dropdown(self):
+        for i in range(40):
+            make_ruleset(f"rule p{i} {{ condition: true }}", name=f"coll/sub/{i}.yar")
+        response = self.client.get(reverse("rules:rule_list"))
+        self.assertNotContains(response, 'name="ruleset"')
+        self.assertContains(response, 'name="path"')
+        response = self.client.get(reverse("rules:rule_list"), {"path": "coll/"})
+        self.assertEqual(response.context["page"].paginator.count, 40)
+        self.assertContains(response, "Path starts with")
+        response = self.client.get(reverse("rules:rule_list"), {"path": "sub/1"})
+        self.assertEqual(response.context["page"].paginator.count, 11)  # 1, 10-19
+        self.assertContains(response, "Path contains")
+
+    def test_ruleset_id_filter_shows_a_removable_chip(self):
+        response = self.client.get(reverse("rules:rule_list"), {"ruleset": self.ruleset.pk})
+        self.assertContains(response, "Ruleset: <span")
+        self.assertContains(response, 'aria-label="Remove ruleset filter"')
+
+    def test_scan_page_has_no_per_ruleset_checkboxes(self):
+        for i in range(20):
+            make_ruleset(f"rule s{i} {{ condition: true }}", name=f"many/{i}.yar")
+        response = self.client.get(reverse("rules:scan"))
+        self.assertNotContains(response, 'type="checkbox"')
+        self.assertContains(response, 'name="path"')
+
+    def test_many_pages_have_a_page_number_field(self):
+        make_ruleset(
+            "\n".join(f"rule q{i:04d} {{ condition: true }}" for i in range(450)), name="q"
+        )
+        response = self.client.get(reverse("rules:rule_list"), {"page": 3})
+        self.assertContains(response, 'type="number"')
+        self.assertContains(response, 'max="5"')
+        self.assertEqual(response.content.decode().count('rel="next"'), 1)
+
+
+class EditConflictTests(ViewTestCase):
+    """Simultaneous edits (review finding 2): the editing service is the only check."""
+
+    def setUp(self):
+        self.login(self.editor)
+        self.url = reverse("rules:rule_edit", args=[self.hello.pk])
+        self.base_text = self.hello.text
+
+    def text(self, marker):
+        return self.base_text.replace("hello world", marker)
+
+    def test_second_save_from_the_same_form_is_a_conflict(self):
+        rendered = self.client.get(self.url).context["form"]["version"].value()
+        self.assertEqual(rendered, 1)
+        first = self.client.post(
+            self.url, {"text": self.text("first_saver"), "version": rendered, "action": "save"}
+        )
+        self.assertRedirects(first, self.hello.get_absolute_url())
+        versions = RuleVersion.objects.filter(rule=self.hello).count()
+
+        second = self.client.post(
+            self.url, {"text": self.text("second_saver"), "version": rendered, "action": "save"}
+        )
+        self.assertEqual(second.status_code, 200)
+        self.assertContains(second, "Not saved: someone else changed this rule")
+        self.assertContains(second, "second_saver")  # the user's text stays in the editor
+        version_2 = reverse("rules:rule_version", args=[self.hello.pk, 2])
+        self.assertContains(second, f'href="{version_2}"')  # current version and its diff
+        self.assertEqual(RuleVersion.objects.filter(rule=self.hello).count(), versions)
+        self.hello.refresh_from_db()
+        self.assertEqual(self.hello.version, 2)
+        self.assertIn("first_saver", self.hello.source)
+
+        # The conflict page carries the current version: saving from it is a
+        # deliberate overwrite after merging by hand.
+        self.assertEqual(second.context["form"]["version"].value(), "2")
+        self.assertContains(second, "Save over version 2")
+        third = self.client.post(
+            self.url, {"text": self.text("merged_text"), "version": 2, "action": "save"}
+        )
+        self.assertRedirects(third, self.hello.get_absolute_url())
+        self.hello.refresh_from_db()
+        self.assertEqual(self.hello.version, 3)
+
+    def test_change_between_page_load_and_save_is_caught_by_the_service(self):
+        # Another save lands after the view loaded the rule, i.e. inside the
+        # service's own window: only its in-transaction check can see it.
+        real_update = editing.update_rule
+
+        def racing_update(rule, text, *args, **kwargs):
+            other = Rule.objects.get(pk=rule.pk)
+            real_update(other, other.text.replace("hello world", "other_user"))
+            return real_update(rule, text, *args, **kwargs)
+
+        with mock.patch("rules.views.rules.editing.update_rule", side_effect=racing_update):
+            response = self.client.post(
+                self.url, {"text": self.text("mine"), "version": 1, "action": "save"}
+            )
+        self.assertContains(response, "Not saved: someone else changed this rule")
+        self.assertEqual(response.context["conflict"]["current"], 2)
+        self.hello.refresh_from_db()
+        self.assertEqual(self.hello.version, 2)
+        self.assertIn("other_user", self.hello.source)
+
+    def test_rule_deleted_while_editing(self):
+        real_update = editing.update_rule
+
+        def deleting_update(rule, text, *args, **kwargs):
+            editing.delete_rule(Rule.objects.get(pk=rule.pk))
+            return real_update(rule, text, *args, **kwargs)
+
+        with mock.patch("rules.views.rules.editing.update_rule", side_effect=deleting_update):
+            response = self.client.post(
+                self.url, {"text": self.text("orphan_text"), "version": 1, "action": "save"}
+            )
+        self.assertContains(response, "Not saved: someone else deleted this rule")
+        self.assertContains(response, "orphan_text")
+        self.assertNotContains(response, 'value="save"')
+        self.assertFalse(Rule.objects.filter(pk=self.hello.pk).exists())
+
+    def test_view_passes_the_rendered_version_to_the_service(self):
+        with mock.patch(
+            "rules.views.rules.editing.update_rule", wraps=editing.update_rule
+        ) as update:
+            self.client.post(self.url, {"text": self.text("x1"), "version": 1, "action": "save"})
+        self.assertEqual(update.call_args.kwargs["expected_version"], 1)
+
+
+class RestoreConflictTests(ViewTestCase):
+    def setUp(self):
+        self.login(self.editor)
+        editing.update_rule(self.hello, self.hello.text.replace("hello world", "second"))
+        self.restore_url = reverse("rules:rule_restore", args=[self.hello.pk, 1])
+
+    def test_version_page_posts_the_current_version(self):
+        response = self.client.get(reverse("rules:rule_version", args=[self.hello.pk, 1]))
+        self.assertContains(response, '<input type="hidden" name="version" value="2">')
+
+    def test_restore_after_someone_else_saved_is_refused(self):
+        # The version page was rendered at version 2; someone saves version 3.
+        editing.update_rule(self.hello, self.hello.text.replace("second", "third"))
+        response = self.client.post(self.restore_url, {"version": 2}, follow=True)
+        self.assertRedirects(response, reverse("rules:rule_version", args=[self.hello.pk, 1]))
+        self.assertContains(response, "Not restored: someone else changed this rule")
+        self.assertContains(
+            response, f'href="{reverse("rules:rule_version", args=[self.hello.pk, 3])}"'
+        )
+        self.hello.refresh_from_db()
+        self.assertEqual(self.hello.version, 3)
+        self.assertFalse(self.hello.versions.filter(number=4).exists())
+        # The refreshed page carries version 3; restoring from it works.
+        response = self.client.post(self.restore_url, {"version": 3})
+        self.assertRedirects(response, self.hello.get_absolute_url())
+        self.hello.refresh_from_db()
+        self.assertEqual(self.hello.version, 4)
+        self.assertIn("hello world", self.hello.source)
+
+    def test_restore_without_the_shown_version_is_refused(self):
+        response = self.client.post(self.restore_url, {}, follow=True)
+        self.assertContains(response, "out of date")
+        self.hello.refresh_from_db()
+        self.assertEqual(self.hello.version, 2)
+
+    def test_restore_of_a_deleted_rule(self):
+        real_restore = editing.restore_version
+
+        def deleting_restore(version, *args, **kwargs):
+            editing.delete_rule(Rule.objects.get(pk=version.rule_id))
+            return real_restore(version, *args, **kwargs)
+
+        with mock.patch("rules.views.rules.editing.restore_version", side_effect=deleting_restore):
+            response = self.client.post(self.restore_url, {"version": 2}, follow=True)
+        self.assertRedirects(response, self.ruleset.get_absolute_url())
+        self.assertContains(response, "someone else deleted the rule hello_world")
+
+
+class NewCollectionTests(ViewTestCase):
+    """A new collection is created by the service together with its first rule."""
+
+    def setUp(self):
+        self.login(self.editor)
+
+    def post(self, name, text, action="save"):
+        return self.client.post(
+            reverse("rules:rule_create"),
+            {"ruleset": "new", "new_ruleset": name, "text": text, "action": action},
+        )
+
+    def test_service_gets_an_unsaved_collection(self):
+        with mock.patch(
+            "rules.views.rules.editing.create_rule", wraps=editing.create_rule
+        ) as create:
+            response = self.post("Fresh collection", NEW_RULE)
+        ruleset = create.call_args.args[0]
+        self.assertIsNone(ruleset.pk)  # the view created nothing itself
+        rule = Rule.objects.get(name="fresh_rule")
+        self.assertRedirects(response, rule.get_absolute_url())
+        self.assertEqual(rule.ruleset.name, "Fresh collection")
+
+    def test_refused_save_leaves_no_collection_behind(self):
+        for text in ("rule not_compiling { condition: nope_nope }", "rule x {"):
+            with self.subTest(text=text):
+                response = self.post("Never created", text)
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(response.context["result"].ok)
+                self.assertContains(response, "Not saved")
+        self.assertFalse(Ruleset.objects.filter(name="Never created").exists())
+
+    def test_validate_checks_against_an_unsaved_collection(self):
+        response = self.post("Scratch", "rule v { condition: nope_nope }", action="validate")
+        self.assertContains(response, "Does not compile")
+        self.assertFalse(Ruleset.objects.filter(name="Scratch").exists())
+
+    def test_existing_collection_name_adds_to_it(self):
+        manual = editing.manual_ruleset("Mine")
+        response = self.post("Mine", NEW_RULE)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Rule.objects.get(name="fresh_rule").ruleset, manual)
+        self.assertEqual(Ruleset.objects.filter(name="Mine").count(), 1)
+
+    def test_names_with_invisible_or_control_characters_are_rejected(self):
+        for name in ("bidi‮override", "zero​width", "line sep", "tab\tname"):
+            with self.subTest(name=repr(name)):
+                response = self.post(name, NEW_RULE)
+                self.assertEqual(response.status_code, 200)
+                self.assertFormError(  # ty: ignore[missing-argument]  # Django 4.1+ signature (form, field, errors); django-types 0.24 has the old one
+                    response.context["form"],
+                    "new_ruleset",
+                    "The name must be a single line of visible text: no line breaks, tabs, "
+                    "control characters or invisible formatting characters.",
+                )
+        self.assertFalse(Rule.objects.filter(name="fresh_rule").exists())
+
+
+class MetaRenderingTests(ViewTestCase):
+    def test_float_meta_values(self):
+        ruleset = make_ruleset(
+            "rule floats {\n  meta:\n    score = 1.5\n    ratio = -0.25\n"
+            "    whole = 3.0\n    huge = 100000000000000000000.0\n"
+            "  condition:\n    true\n}\n",
+            name="floats",
+        )
+        rule = ruleset.rules.get()
+        self.assertIn(["score", 1.5], rule.meta)
+        self.login(self.viewer)
+        response = self.client.get(rule.get_absolute_url())
+        for shown in ("1.5", "-0.25", "3.0", "100000000000000000000.0"):
+            self.assertContains(response, f'<dd class="text-sm break-words">{shown}</dd>')
+        self.assertNotContains(response, "e+20")
+
+    def test_meta_value_filter(self):
+        from rules.templatetags.yaradude import meta_value
+
+        self.assertEqual(meta_value(True), "true")
+        self.assertEqual(meta_value(7), "7")
+        self.assertEqual(meta_value(0.1), "0.1")
+        self.assertEqual(meta_value(1e-7), "0.0000001")
+        self.assertEqual(meta_value("1.5"), "1.5")
+
+
+class SearchTests(ViewTestCase):
+    """The `q` filter goes through search.search_rules (FTS5, literal phrase)."""
+
+    url = reverse("rules:rule_list")
+
+    def setUp(self):
+        self.login(self.viewer)
+        make_ruleset(
+            'rule hostile_input {\n  meta:\n    description = "say \\"AND\\" name: -x *star* (OR"\n'
+            "  condition:\n    true\n}\n",
+            name="hostile",
+        )
+
+    def names(self, response):
+        return [rule.name for rule in response.context["page"].object_list]
+
+    def test_hostile_input_is_literal(self):
+        for text in ('"', "AND", "name:", "-x", "*", "(OR", '\\"AND\\"', "*star* (OR"):
+            with self.subTest(text=text):
+                response = self.client.get(self.url, {"q": text})
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("hostile_input", self.names(response))
+        response = self.client.get(self.url, {"q": "NEAR(name)"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.names(response), [])
+
+    def test_view_uses_the_search_service(self):
+        with mock.patch(
+            "rules.views.rules.search_rules", wraps=search.search_rules
+        ) as search_rules:
+            response = self.client.get(self.url, {"q": "greeting"})
+        self.assertEqual(search_rules.call_args.args[1], "greeting")
+        self.assertTrue(search_rules.call_args.kwargs["rank"])
+        self.assertEqual(self.names(response), ["hello_world"])
+
+    def test_relevance_is_the_default_and_only_offered_while_searching(self):
+        response = self.client.get(self.url, {"q": "hello"})
+        self.assertEqual(response.context["values"]["sort"], "relevance")
+        self.assertContains(response, ">Relevance</option>")
+        # The default option submits no value, so a new search starts by relevance.
+        self.assertContains(response, '<option value="" selected>Relevance</option>')
+        response = self.client.get(self.url, {"q": "hello", "sort": "name"})
+        self.assertEqual(response.context["values"]["sort"], "name")
+        response = self.client.get(self.url)
+        self.assertEqual(response.context["values"]["sort"], "name")
+        self.assertNotContains(response, ">Relevance</option>")
+        self.assertContains(response, '<option value="" selected>Name</option>')
+        response = self.client.get(self.url, {"sort": "relevance"})
+        self.assertEqual(response.context["values"]["sort"], "name")
+
+    def test_short_input_falls_back_to_substring(self):
+        response = self.client.get(self.url, {"q": "pe"})
+        self.assertIn("pe_rule", self.names(response))
+
+    def test_search_keeps_query_count_and_deferred_columns(self):
+        def run(**params):
+            with CaptureQueriesContext(connection) as queries:
+                self.client.get(self.url, params)
+            return queries
+
+        few = run(q="rule")
+        make_ruleset(
+            "\n".join(f"rule many_{i} {{ condition: true }}" for i in range(30)), name="many"
+        )
+        many = run(q="rule")
+        self.assertEqual(len(few), len(many))
+        for params in ({"q": "rule"}, {"q": "rule", "sort": "-updated"}):
+            rows = [
+                q["sql"]
+                for q in run(**params)
+                if 'FROM "rules_rule"' in q["sql"] and "LIMIT" in q["sql"]
+            ]
+            self.assertTrue(rows)
+            for sql in rows:
+                self.assertNotIn('"rules_rule"."source"', sql)
+                self.assertNotIn("original_content", sql)
+
+
+class DeletedRuleLeakTests(ViewTestCase):
+    """Joins bypass the default manager; deleted rules must not leak through them."""
+
+    def test_tags_used_only_by_deleted_rules_are_not_offered(self):
+        ruleset = make_ruleset("rule lonely : only_here { condition: true }", name="lonely")
+        lonely = ruleset.rules.get()
+        self.login(self.viewer)
+        response = self.client.get(reverse("rules:rule_list"))
+        self.assertIn("only_here", list(response.context["tags"]))
+        dashboard = self.client.get(reverse("rules:dashboard")).context["tag_count"]
+        editing.delete_rule(lonely, user=self.editor)
+        response = self.client.get(reverse("rules:rule_list"))
+        self.assertNotIn("only_here", list(response.context["tags"]))
+        self.assertIn("greeting", list(response.context["tags"]))
+        response = self.client.get(reverse("rules:dashboard"))
+        self.assertEqual(response.context["tag_count"], dashboard - 1)

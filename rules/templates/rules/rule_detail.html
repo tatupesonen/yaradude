@@ -19,7 +19,7 @@
   <div class="flex flex-wrap gap-2">
     {% if perms.rules.change_rule %}<a class="btn btn-primary" href="{% url 'rules:rule_edit' rule.pk %}">Edit</a>{% endif %}
     <a class="btn" href="{% url 'rules:rule_download' rule.pk %}">Download .yar</a>
-    {% if perms.rules.delete_rule %}<a class="btn btn-ghost text-error" href="{% url 'rules:rule_delete' rule.pk %}" title="Permanently deletes the rule and its version history; cannot be undone">Delete rule and history…</a>{% endif %}
+    {% if perms.rules.delete_rule %}<a class="btn btn-ghost text-error" href="{% url 'rules:rule_delete' rule.pk %}" title="Hides the rule; it is kept with its history and can be restored">Delete…</a>{% endif %}
   </div>
 </div>
 
@@ -82,8 +82,8 @@
         <dt>Imports</dt><dd class="font-mono text-xs">{% for module in rule.imports %}{{ module }}{% if not forloop.last %}, {% endif %}{% empty %}<span class="font-sans text-faint">none</span>{% endfor %}</dd>
         <dt>First imported</dt><dd>{{ rule.created_at|ts }}</dd>
         <dt>Last changed</dt><dd>{{ rule.updated_at|ts }}</dd>
-        <dt>SHA-256</dt><dd>{% include "rules/includes/hash.html" with value=rule.sha256 id="rule-sha256" label="SHA-256" %}</dd>
-        {% if rule.is_modified %}<dt>As imported</dt><dd>{% include "rules/includes/hash.html" with value=rule.imported_sha256 id="rule-imported-sha256" label="imported SHA-256" extra_class="text-modified" %}</dd>{% endif %}
+        <dt>SHA-256</dt><dd class="xl:col-span-full">{% include "rules/includes/hash.html" with value=rule.sha256 id="rule-sha256" label="SHA-256" %}</dd>
+        {% if rule.is_modified %}<dt>As imported</dt><dd class="xl:col-span-full">{% include "rules/includes/hash.html" with value=rule.imported_sha256 id="rule-imported-sha256" label="imported SHA-256" extra_class="text-modified" %}</dd>{% endif %}
       </dl>
     </section>
     <section class="card card-body" aria-labelledby="meta-heading">

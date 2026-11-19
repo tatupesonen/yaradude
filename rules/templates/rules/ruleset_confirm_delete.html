@@ -4,11 +4,11 @@
 <div class="mx-auto max-w-xl sm:mt-6">
   <h1>Delete ruleset <span class="font-mono break-all">{{ ruleset.name }}</span>?</h1>
   <div class="card card-body mt-4 flex flex-col gap-3 text-sm">
-    <p>This permanently deletes the ruleset, <strong>its {{ ruleset.active_count|add:ruleset.removed_count }} rule{{ ruleset.active_count|add:ruleset.removed_count|pluralize }} and their entire version history</strong>. It cannot be undone.</p>
-    <p class="text-muted">The import history keeps its records of this file. {% if ruleset.origin == 'directory' %}If the file is still in the rules directory, the next directory import creates the ruleset again from scratch.{% elif ruleset.origin == 'upload' %}Uploading the file again creates the ruleset again from scratch.{% endif %}</p>
+    <p>The ruleset and its {{ ruleset.active_count|add:ruleset.removed_count }} rule{{ ruleset.active_count|add:ruleset.removed_count|pluralize }} are hidden and left out of lists, scans, exports and the compiled rule set. <strong>They are not destroyed:</strong> they are kept with their history and can be restored. Restoring is not yet available in this interface.</p>
+    <p class="text-muted">{% if ruleset.origin == 'directory' %}While it is deleted, directory imports skip its file.{% elif ruleset.origin == 'upload' %}While it is deleted, uploads of the same file name are skipped.{% else %}While it is deleted, its name cannot be used for a new collection.{% endif %}</p>
     <form method="post" class="mt-2 flex flex-wrap gap-2">
       {% csrf_token %}
-      <button type="submit" class="btn btn-danger">Permanently delete ruleset, rules and history</button>
+      <button type="submit" class="btn btn-danger">Delete ruleset</button>
       <a class="btn" href="{{ ruleset.get_absolute_url }}">Cancel</a>
     </form>
   </div>

@@ -71,3 +71,13 @@ class RoleTests(TestCase):
         )
         self.assertFalse(editor.has_perm("auth.change_user"))
         self.assertFalse(nobody.has_perm("rules.view_rule"))
+
+
+class EnsureRolesDatabaseTests(TestCase):
+    def test_honours_using(self) -> None:
+        from django.utils.connection import ConnectionDoesNotExist
+
+        # post_migrate passes the database being migrated; the groups must be
+        # written there, not to the default database.
+        with self.assertRaises(ConnectionDoesNotExist):
+            ensure_roles(using="no-such-database")

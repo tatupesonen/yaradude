@@ -97,7 +97,7 @@ class PermissionMatrixTests(ViewTestCase):
     def test_viewer_cannot_upload_or_scan_directory(self):
         self.login(self.viewer)
         upload = SimpleUploadedFile("x.yar", b"rule x { condition: true }")
-        response = self.client.post(reverse("rules:import_upload"), {"files": [upload]})
+        response = self.client.post(reverse("rules:import_upload"), {"rule_files": [upload]})
         self.assertEqual(response.status_code, 403)
         self.assertFalse(Ruleset.objects.filter(path="x.yar").exists())
 
@@ -176,3 +176,78 @@ class PermissionMatrixTests(ViewTestCase):
         response = self.client.get(reverse("rules:import"))
         self.assertContains(response, reverse("rules:import_scan"))
         self.assertContains(response, reverse("rules:import_upload"))
+
+
+class ObjectLookupOrderTests(ViewTestCase):
+    """A user without the permission gets 403 whether or not the id exists."""
+
+    def test_missing_and_existing_ids_look_the_same_without_permission(self):
+        self.login(self.viewer)
+        for name, existing, missing in (
+            ("rule_edit", [self.hello.pk], [999999]),
+            ("rule_delete", [self.hello.pk], [999999]),
+            ("rule_restore", [self.hello.pk, 1], [999999, 1]),
+            ("ruleset_delete", [self.ruleset.pk], [999999]),
+        ):
+            for method in ("get", "post"):
+                with self.subTest(name=name, method=method):
+                    request = getattr(self.client, method)
+                    first = request(reverse(f"rules:{name}", args=existing))
+                    second = request(reverse(f"rules:{name}", args=missing))
+                    if not (name == "rule_restore" and method == "get"):
+                        self.assertEqual(first.status_code, 403)
+                        self.assertEqual(second.status_code, 403)
+
+    def test_nobody_gets_403_for_missing_read_objects(self):
+        self.login(self.nobody)
+        for name, args in (
+            ("rule_detail", [999999]),
+            ("ruleset_detail", [999999]),
+            ("import_run", [999999]),
+            ("rule_version", [999999, 1]),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.client.get(reverse(f"rules:{name}", args=args)).status_code, 403
+                )
+
+
+class NewCollectionPermissionTests(ViewTestCase):
+    def test_creating_a_collection_needs_add_ruleset(self):
+        from django.contrib.auth.models import Permission
+
+        user = self.make_user("rule-adder", None)
+        user.user_permissions.add(
+            *Permission.objects.filter(
+                content_type__app_label="rules", codename__in=["view_rule", "add_rule"]
+            )
+        )
+        self.login(user)
+        text = "rule brand_new { condition: true }"
+        response = self.client.post(
+            reverse("rules:rule_create"),
+            {"ruleset": "new", "new_ruleset": "Mine", "text": text, "action": "save"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Ruleset.objects.filter(name="Mine").exists())
+        # Adding to an existing ruleset only needs add_rule.
+        response = self.client.post(
+            reverse("rules:rule_create"),
+            {"ruleset": self.ruleset.pk, "text": text, "action": "save"},
+        )
+        self.assertEqual(response.status_code, 302)
+        # Naming an existing manual collection creates nothing: add_rule is enough.
+        from rules.services import editing
+
+        existing = editing.manual_ruleset("Shared")
+        response = self.client.post(
+            reverse("rules:rule_create"),
+            {
+                "ruleset": "new",
+                "new_ruleset": "Shared",
+                "text": "rule into_existing { condition: true }",
+                "action": "save",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Rule.objects.get(name="into_existing").ruleset, existing)

@@ -240,9 +240,18 @@ rule b { condition: true }
             "// x\r\n\r\nrule b { condition: true }"
         )
         rules = parse(text).rules
-        self.assertEqual(rules[0].source, "// about a\r\nrule a {\r\n condition: true\r\n}")
+        # Line endings are normalised, so the rule's text and hash do not
+        # depend on whether it came from disk or from a browser textarea.
+        self.assertEqual(rules[0].source, "// about a\nrule a {\n condition: true\n}")
         self.assertEqual(rules[1].source, "rule b { condition: true }")
         self.assertEqual(rules[1].line, 8)
+        lf = parse(text.replace("\r\n", "\n")).rules
+        self.assertEqual([r.sha256 for r in rules], [r.sha256 for r in lf])
+
+    def test_lone_carriage_return_is_kept(self) -> None:
+        # A lone CR may sit inside a string literal, so only CRLF is converted.
+        rule = parse('rule a { strings: $a = "x\ry" condition: $a }').rules[0]
+        self.assertIn("x\ry", rule.source)
 
     def test_text_and_hash(self) -> None:
         rule = parse('import "pe"\nrule a { condition: pe.is_pe }').rules[0]
@@ -307,9 +316,15 @@ class ParseErrorTests(SimpleTestCase):
         self.assertParseError("rule a\ncondition: true }", 'expected "{", got "condition"', 2)
         self.assertParseError("rule", "unexpected end of file, expected a rule name", 1)
 
+    def test_float_meta_values(self) -> None:
+        # Review finding 8: YARA-X accepts floats in meta; they used to fail the file.
+        rule = parse("rule a {\n meta:\n x = 1.5\n y = -0.25\n z = 3\n condition: true }").rules[0]
+        self.assertEqual(rule.meta, [("x", 1.5), ("y", -0.25), ("z", 3)])
+        self.assertIsInstance(rule.meta[2][1], int)
+
     def test_invalid_meta(self) -> None:
         self.assertParseError(
-            "rule a {\n meta:\n x = 1.5\n condition: true }", "meta value 1.5 is not an integer", 3
+            "rule a {\n meta:\n x = 1.5KB\n condition: true }", "invalid meta value 1.5KB", 3
         )
         self.assertParseError(
             "rule a {\n meta:\n x = $a\n condition: true }", 'invalid value for meta "x": "$a"', 3
@@ -363,3 +378,42 @@ class ParseRuleTextTests(SimpleTestCase):
             with self.subTest(message=message), self.assertRaises(RuleParseError) as ctx:
                 parse_rule_text(text)
             self.assertEqual((ctx.exception.message, ctx.exception.line), (message, line))
+
+
+class LargeInputTests(SimpleTestCase):
+    """Review finding 1: a 10 MiB file used to take 1.65 GB and 10 s to parse."""
+
+    RULE = """// Rule {i}
+rule rule_{i} : tag_a tag_b {{
+    meta:
+        description = "Rule {i} with \\"escapes\\""
+        score = {i}
+    strings:
+        $s1 = "text {i}" ascii wide
+        $s2 = {{ 4D 5A 90 00 ?? [2-4] ( 41 | 42 ) }}
+        $r1 = /abc[0-9]{{2,4}}\\/x{i}/ nocase
+    condition:
+        pe.number_of_sections > 2 and math.entropy(0, filesize) > 7.0 and any of them
+}}
+
+"""
+
+    def test_memory_stays_proportional_to_the_text(self) -> None:
+        import tracemalloc
+
+        text = 'import "pe"\nimport "math"\n\n' + "".join(
+            self.RULE.format(i=i) for i in range(1200)
+        )
+        self.assertGreater(len(text), 400_000)
+        tracemalloc.start()
+        try:
+            parsed = parse(text)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(len(parsed.rules), 1200)
+        self.assertEqual(parsed.rules[-1].imports, ["pe", "math"])
+        self.assertEqual(parsed.rules[5].meta[1], ("score", 5))
+        # The rules' sources are about one copy of the text; the old
+        # tokenizer peaked at about 75 times the text size.
+        self.assertLess(peak, 8 * len(text))

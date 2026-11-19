@@ -16,7 +16,7 @@
     <a class="btn" href="{% url 'rules:ruleset_download' ruleset.pk %}" title="Current active rules, rebuilt">Download .yar</a>
     {% if has_original %}<a class="btn" href="{% url 'rules:ruleset_original' ruleset.pk %}" title="The file exactly as last imported">Original file</a>{% endif %}
     <a class="btn" href="{% url 'rules:rule_list' %}?ruleset={{ ruleset.pk }}&amp;status=all">Search in ruleset</a>
-    {% if perms.rules.delete_ruleset %}<a class="btn btn-ghost text-error" href="{% url 'rules:ruleset_delete' ruleset.pk %}" title="Permanently deletes the ruleset, its rules and their history; cannot be undone">Delete ruleset and history…</a>{% endif %}
+    {% if perms.rules.delete_ruleset %}<a class="btn btn-ghost text-error" href="{% url 'rules:ruleset_delete' ruleset.pk %}" title="Hides the ruleset and its rules; they are kept with their history and can be restored">Delete…</a>{% endif %}
   </div>
 </div>
 
@@ -57,7 +57,7 @@
       <dt>Created</dt><dd>{{ ruleset.created_at|ts }}</dd>
       <dt>Last imported</dt><dd>{{ ruleset.last_imported_at|ts }}</dd>
       <dt>Last changed</dt><dd>{{ ruleset.updated_at|ts }}</dd>
-      {% if ruleset.sha256 %}<dt>File SHA-256</dt><dd>{% include "rules/includes/hash.html" with value=ruleset.sha256 id="ruleset-sha256" label="SHA-256" %}</dd>{% endif %}
+      {% if ruleset.sha256 %}<dt>File SHA-256</dt><dd class="xl:col-span-full">{% include "rules/includes/hash.html" with value=ruleset.sha256 id="ruleset-sha256" label="SHA-256" %}</dd>{% endif %}
     </dl>
   </aside>
 </div>

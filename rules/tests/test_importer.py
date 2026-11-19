@@ -436,3 +436,380 @@ class UploadImportTests(TestCase):
         import_uploads([self.upload("set.yar", "rule a : old { condition: filesize > 0 }")])
         import_uploads([self.upload("set.yar", "rule a : new { condition: filesize > 0 }")])
         self.assertEqual(list(Tag.objects.values_list("name", flat=True)), ["new"])
+
+
+class RenameThenReimportTests(DirectoryImportTestCase):
+    """Review finding 3: a locally renamed rule must survive an import of its file."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.path = self.write("set.yar", V1)
+        self.run_import()
+        two = self.rule("two")
+        result = editing.update_rule(two, "rule two_renamed : beta { condition: filesize > 10 }")
+        self.assertTrue(result.ok, result.error)
+        self.renamed = Rule.objects.get(name="two_renamed")
+
+    def test_rename_survives_an_import_that_changes_other_rules(self) -> None:
+        self.path.write_text(V1.replace("filesize > 20", "filesize > 21"))
+        run = self.run_import()
+        self.assertEqual(
+            (run.files_failed, run.rules_created, run.rules_updated, run.rules_removed),
+            (0, 0, 1, 0),
+        )
+        self.assertFalse(Rule.objects.filter(name="two").exists())
+        renamed = Rule.objects.get(pk=self.renamed.pk)
+        self.assertEqual(
+            (renamed.name, renamed.removed_at, renamed.version), ("two_renamed", None, 2)
+        )
+        self.assertEqual(renamed.position, 1)
+        self.assertTrue(renamed.is_modified)
+        self.assertEqual(renamed.imported_name, "two")
+
+    def test_disk_change_of_a_renamed_rule_wins_and_keeps_the_history(self) -> None:
+        self.path.write_text(V1.replace("filesize > 10", "filesize > 12"))
+        run = self.run_import()
+        self.assertEqual((run.rules_created, run.rules_updated, run.rules_removed), (0, 1, 0))
+        rule = Rule.objects.get(pk=self.renamed.pk)
+        self.assertEqual((rule.name, rule.version, rule.is_modified), ("two", 3, False))
+        self.assertIn("rule two_renamed", rule.versions.get(number=2).source)
+
+    def test_rename_onto_a_name_the_file_brings_back_fails_the_file(self) -> None:
+        # The file gains a rule with the name the local rename took.
+        self.path.write_text(V1 + "\nrule two_renamed { condition: filesize > 30 }\n")
+        run = self.run_import()
+        self.assertEqual(run.files_failed, 1)
+        self.assertIn('the name "two_renamed"', run.files.get().message)
+        self.assertEqual(Rule.objects.get(pk=self.renamed.pk).name, "two_renamed")
+
+    def test_legacy_rename_without_imported_name_matches_by_hash(self) -> None:
+        # Rules renamed before imported_name was recorded.
+        Rule.objects.update(imported_name="")
+        self.path.write_text(V1.replace("filesize > 20", "filesize > 21"))
+        run = self.run_import()
+        self.assertEqual((run.rules_created, run.rules_removed), (0, 0))
+        self.assertEqual(Rule.objects.get(pk=self.renamed.pk).name, "two_renamed")
+
+
+class RobustRunTests(DirectoryImportTestCase):
+    """Review finding 4: one bad file must not abort the run."""
+
+    def test_unexpected_error_is_recorded_and_the_run_finishes(self) -> None:
+        from unittest import mock
+
+        from rules.services import importer
+
+        self.write("a.yar", 'rule a { meta: secret = "TOP-SECRET" condition: filesize > 0 }')
+        self.write("b.yar", "rule b { condition: filesize > 0 }")
+        real_write = importer._write
+
+        def failing_write(run, origin, path, prepared):  # noqa: ANN001, ANN202
+            if path == "a.yar":
+                raise RuntimeError(f"boom while writing {prepared.text}")
+            return real_write(run, origin, path, prepared)
+
+        with (
+            mock.patch.object(importer, "_write", failing_write),
+            self.assertLogs("rules.services.importer", "ERROR") as logs,
+        ):
+            run = self.run_import()
+        self.assertIsNotNone(run.finished_at)
+        run.refresh_from_db()
+        self.assertEqual(
+            (run.files_seen, run.files_changed, run.files_failed, run.rules_created), (2, 1, 1, 1)
+        )
+        failed = run.files.get(status=ImportFile.Status.FAILED)
+        self.assertEqual(failed.path, "a.yar")
+        self.assertIn("RuntimeError", failed.message)
+        self.assertNotIn("TOP-SECRET", failed.message)
+        self.assertIn("Traceback", "\n".join(logs.output))
+        self.assertEqual(list(Rule.objects.values_list("name", flat=True)), ["b"])
+
+    def test_unreadable_file(self) -> None:
+        import os
+
+        if os.geteuid() == 0:
+            self.skipTest("root can read any file")
+        path = self.write("locked.yar", "rule locked { condition: true }")
+        self.write("open.yar", "rule open_rule { condition: filesize > 0 }")
+        path.chmod(0)
+        try:
+            run = self.run_import()
+        finally:
+            path.chmod(0o644)
+        self.assertEqual((run.files_seen, run.files_failed, run.files_changed), (2, 1, 1))
+        self.assertIn("could not be read", run.files.get(status="failed").message)
+
+    def test_counters_are_saved_after_each_file(self) -> None:
+        from unittest import mock
+
+        from rules.services import importer
+
+        self.write("a.yar", "rule a { condition: filesize > 0 }")
+        self.write("b.yar", "rule b { condition: filesize > 0 }")
+        seen: list[int] = []
+        real = importer._import_content
+
+        def spy(run, origin, path, content):  # noqa: ANN001, ANN202
+            stored = ImportRun.objects.get(pk=run.pk)
+            seen.append(stored.files_seen)
+            return real(run, origin, path, content)
+
+        with mock.patch.object(importer, "_import_content", spy):
+            self.run_import()
+        self.assertEqual(seen, [0, 1])
+
+
+class TransactionScopeTests(DirectoryImportTestCase):
+    """Review finding 1: parse, safety-net compile and hashing run before the write lock."""
+
+    def test_parse_and_compiles_run_outside_the_write_transaction(self) -> None:
+        from unittest import mock
+
+        from django.db import connection
+
+        from rules.services import importer
+
+        self.write("set.yar", V1)
+        depth = len(connection.atomic_blocks)
+        depths: dict[str, int] = {}
+
+        def recording(name, function):  # noqa: ANN001, ANN202
+            def wrapper(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+                depths[name] = len(connection.atomic_blocks)
+                return function(*args, **kwargs)
+
+            return wrapper
+
+        with (
+            mock.patch.object(importer, "decode", recording("decode", importer.decode)),
+            mock.patch.object(importer, "parse", recording("parse", importer.parse)),
+            mock.patch.object(
+                importer,
+                "compiled_identifiers",
+                recording("compiled_identifiers", importer.compiled_identifiers),
+            ),
+            mock.patch.object(
+                importer, "compile_entries", recording("compile_entries", importer.compile_entries)
+            ),
+        ):
+            run = self.run_import()
+        self.assertEqual(run.rules_created, 3)
+        self.assertEqual(
+            depths,
+            {
+                "decode": depth,
+                "parse": depth,
+                "compiled_identifiers": depth,
+                "compile_entries": depth,
+            },
+        )
+        self.assertEqual(Rule.objects.get(name="one").compile_error, "")
+
+    @override_settings(YARADUDE_MAX_RULE_FILE_BYTES=100)
+    def test_size_limit_is_a_setting(self) -> None:
+        from rules.services.importer import rule_files
+
+        self.write("small.yar", "rule small { condition: filesize > 0 }")
+        self.write("big.yar", "// " + "x" * 120 + "\nrule big { condition: filesize > 0 }")
+        self.assertEqual(
+            [(f.identity, bool(f.error)) for f in rule_files(self.root)],
+            [("big.yar", True), ("small.yar", False)],
+        )
+        run = self.run_import()
+        self.assertEqual((run.files_seen, run.files_failed, run.rules_created), (2, 1, 1))
+        self.assertEqual(run.files.get(status="failed").message, "File is larger than 100 bytes.")
+
+    def test_file_growing_past_the_limit_after_listing_fails(self) -> None:
+        from rules.services.importer import read_rule_file, rule_files
+
+        path = self.write("grow.yar", "rule grow { condition: filesize > 0 }")
+        [file] = rule_files(self.root)
+        with (
+            override_settings(YARADUDE_MAX_RULE_FILE_BYTES=20),
+            self.assertRaisesMessage(Exception, "larger than 20 bytes"),
+        ):
+            read_rule_file(file, self.root)
+        self.assertEqual(read_rule_file(file, self.root), path.read_bytes())
+
+
+class LineEndingTests(DirectoryImportTestCase):
+    """Review finding 5: CRLF files, the editor and hashes agree."""
+
+    CRLF = V1.replace("\n", "\r\n")
+
+    def test_crlf_file_saved_unchanged_from_the_editor_is_not_a_change(self) -> None:
+        self.write("set.yar", self.CRLF.encode())
+        self.run_import()
+        ruleset = Ruleset.objects.get()
+        self.assertEqual(ruleset.original_content, self.CRLF)  # verbatim
+        two = self.rule("two")
+        self.assertNotIn("\r", two.source)
+        # A browser textarea submits CRLF.
+        result = editing.update_rule(two, two.text.replace("\n", "\r\n"))
+        self.assertTrue(result.ok, result.error)
+        two.refresh_from_db()
+        self.assertEqual((two.version, two.is_modified), (1, False))
+
+    def test_crlf_and_lf_versions_of_a_file_give_the_same_rules(self) -> None:
+        path = self.write("set.yar", self.CRLF.encode())
+        self.run_import()
+        hashes = dict(Rule.objects.values_list("name", "sha256"))
+        path.write_bytes(V1.encode())
+        run = self.run_import()
+        self.assertEqual((run.files_changed, run.rules_updated, run.rules_unchanged), (1, 0, 3))
+        self.assertEqual(dict(Rule.objects.values_list("name", "sha256")), hashes)
+
+    def test_migration_converts_existing_crlf_rows_without_marking_them_modified(self) -> None:
+        import importlib
+
+        from django.apps import apps
+
+        migration = importlib.import_module(
+            "rules.migrations.0002_imported_name_and_lf_line_endings"
+        )
+        self.write("set.yar", V1)
+        self.run_import()
+        # Rows as the old importer stored a CRLF file: CRLF source and hashes.
+        from rules.services.parser import content_sha256
+
+        for rule in Rule.objects.all():
+            source = rule.source.replace("\n", "\r\n")
+            sha = content_sha256(rule.imports, source)
+            Rule.objects.filter(pk=rule.pk).update(source=source, sha256=sha, imported_sha256=sha)
+            rule.versions.update(source=source, sha256=sha)
+        lf_hashes = {r.name: content_sha256(r.imports, r.source) for r in Rule.objects.all()}
+        self.assertFalse(Rule.objects.modified().exists())
+
+        migration.normalize_crlf(apps, None)
+
+        self.assertFalse(Rule.objects.filter(source__contains="\r").exists())
+        self.assertFalse(RuleVersion.objects.filter(source__contains="\r").exists())
+        self.assertFalse(Rule.objects.modified().exists())
+        for rule in Rule.objects.all():
+            self.assertEqual(
+                rule.sha256, content_sha256(rule.imports, rule.source.replace("\r\n", "\n"))
+            )
+            self.assertEqual(rule.versions.get().sha256, rule.sha256)
+        self.assertEqual(len(lf_hashes), 3)
+
+
+class SymlinkTests(DirectoryImportTestCase):
+    """Review finding 7: symlinks are not followed outside the rules directory."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.outside = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (self.outside / "secret.yar").write_text("rule outside { condition: filesize > 0 }")
+        (self.outside / "dir").mkdir()
+        (self.outside / "dir" / "deep.yar").write_text("rule deep { condition: filesize > 0 }")
+
+    def test_symlinks_leading_outside_are_skipped(self) -> None:
+        from rules.services.importer import rule_files
+
+        (self.root / "link.yar").symlink_to(self.outside / "secret.yar")
+        (self.root / "linkdir").symlink_to(self.outside / "dir")
+        self.write("real.yar", "rule real { condition: filesize > 0 }")
+        self.write("sub/inner.yar", "rule inner { condition: filesize > 0 }")
+        (self.root / "alias.yar").symlink_to(self.root / "sub" / "inner.yar")
+        (self.root / "dangling.yar").symlink_to(self.root / "missing.yar")
+
+        listed = {f.identity: f.error for f in rule_files(self.root)}
+        self.assertEqual(
+            sorted(listed), ["alias.yar", "dangling.yar", "link.yar", "real.yar", "sub/inner.yar"]
+        )
+        self.assertEqual(listed["alias.yar"], "")
+        for name in ("link.yar", "dangling.yar"):
+            self.assertIn("symbolic link that leads outside", listed[name])
+            self.assertNotIn(str(self.outside), listed[name])
+        run = self.run_import()
+        self.assertEqual((run.files_seen, run.files_failed, run.files_changed), (5, 2, 3))
+        self.assertEqual(
+            sorted(run.files.filter(status="failed").values_list("path", flat=True)),
+            ["dangling.yar", "link.yar"],
+        )
+        self.assertFalse(Rule.objects.filter(name__in=["outside", "deep"]).exists())
+
+    def test_symlink_swapped_after_listing_is_refused(self) -> None:
+        from rules.services.importer import ImportFailed, read_rule_file, rule_files
+
+        self.write("sub/inner.yar", "rule inner { condition: filesize > 0 }")
+        link = self.root / "alias.yar"
+        link.symlink_to(self.root / "sub" / "inner.yar")
+        file = rule_files(self.root)[0]
+        link.unlink()
+        link.symlink_to(self.outside / "secret.yar")
+        with self.assertRaises(ImportFailed):
+            read_rule_file(file, self.root)
+
+
+class FloatMetaImportTests(DirectoryImportTestCase):
+    """Review finding 8: a float meta value no longer fails the file."""
+
+    def test_float_meta(self) -> None:
+        self.write("f.yar", "rule f { meta: score = 7.5 condition: filesize > 0 }")
+        run = self.run_import()
+        self.assertEqual((run.files_changed, run.files_failed), (1, 0))
+        rule = self.rule("f")
+        self.assertEqual((rule.meta, rule.compile_error), ([["score", 7.5]], ""))
+
+
+class DeletedIsStickyTests(DirectoryImportTestCase):
+    """PLAN.md 12.11: imports do not bring back what was deleted in yaradude."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.path = self.write("set.yar", V1)
+        self.run_import()
+
+    def test_import_over_a_deleted_rule(self) -> None:
+        editing.delete_rule(self.rule("two"))
+        self.path.write_text(V1.replace("filesize > 10", "filesize > 11").replace("> 20", "> 21"))
+        run = self.run_import()
+        self.assertEqual((run.rules_updated, run.rules_skipped, run.rules_created), (1, 1, 0))
+        self.assertIn("1 skipped (deleted)", run.summary)
+        two = Rule.all_objects.get(name="two")
+        self.assertEqual((two.is_deleted, two.version), (True, 1))
+        self.assertIn("filesize > 10", two.source)
+        self.assertEqual(run.files.get().rules_skipped, 1)
+
+        # Restore: the stored content comes back; the next import (which
+        # re-reads the file) updates it under the normal rules.
+        self.assertTrue(editing.restore_rule(two).ok)
+        run = self.run_import()
+        self.assertEqual((run.files_changed, run.rules_updated), (1, 1))
+        two = self.rule("two")
+        self.assertIn("filesize > 11", two.source)
+        self.assertEqual(two.version, 2)
+
+    def test_deleted_rule_dropped_from_the_file_is_left_alone(self) -> None:
+        editing.delete_rule(self.rule("three"))
+        self.path.write_text(V1.replace("rule three { condition: filesize > 20 }\n", ""))
+        run = self.run_import()
+        self.assertEqual(run.rules_removed, 0)
+        three = Rule.all_objects.get(name="three")
+        self.assertEqual((three.is_deleted, three.removed_at), (True, None))
+
+    def test_import_over_a_deleted_ruleset(self) -> None:
+        editing.delete_ruleset(Ruleset.objects.get())
+        run = self.run_import()  # unchanged file
+        self.assertEqual((run.files_seen, run.files_skipped, run.files_changed), (1, 1, 0))
+        self.assertFalse(run.files.exists())
+        self.path.write_text(V1 + "\nrule four { condition: filesize > 40 }\n")
+        run = self.run_import()
+        self.assertEqual((run.files_skipped, run.rules_created), (1, 0))
+        self.assertEqual(run.files.get().status, ImportFile.Status.SKIPPED)
+        self.assertFalse(Rule.all_objects.filter(name="four").exists())
+        self.assertEqual(Ruleset.all_objects.count(), 1)
+
+        editing.restore_ruleset(Ruleset.all_objects.get())
+        run = self.run_import()
+        self.assertEqual((run.files_changed, run.rules_created), (1, 1))
+        self.assertEqual(Rule.objects.count(), 4)
+
+    def test_upload_over_a_deleted_ruleset(self) -> None:
+        upload = SimpleUploadedFile("up.yar", b"rule up { condition: filesize > 0 }")
+        import_uploads([upload])
+        editing.delete_ruleset(Ruleset.objects.get(origin=Ruleset.Origin.UPLOAD))
+        run = import_uploads([SimpleUploadedFile("up.yar", b"rule up { condition: filesize > 1 }")])
+        self.assertEqual((run.files_skipped, run.rules_updated), (1, 0))

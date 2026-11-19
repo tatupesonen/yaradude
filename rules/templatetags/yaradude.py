@@ -1,5 +1,8 @@
 """Template helpers for the yaradude UI: timestamps, status badges, navigation, querystrings."""
 
+import math
+from decimal import Decimal
+
 from django import template
 from django.utils import timezone
 from django.utils.html import format_html
@@ -50,7 +53,7 @@ def ts(value, style: str = ""):
     if value > now:
         relative = "just now"
     else:
-        relative = timesince(value, now, depth=1)
+        relative = timesince(value, now, depth=1)  # ty: ignore[unknown-argument]  # `depth` (Django 4.1) is absent from django-types 0.24
         relative = "just now" if relative.startswith("0\xa0") else f"{relative} ago"
     if style == "short":
         return format_html(
@@ -118,9 +121,18 @@ def sort_header(context, label, key, current, numeric=False):
 
 @register.filter
 def meta_value(value) -> str:
-    """A rule meta value as YARA would write it."""
+    """
+    A rule meta value as YARA would write it: booleans as true/false and
+    floats in plain decimal notation (shortest form that reads back as the
+    same number, never an exponent: 1e+20 becomes 100000000000000000000.0).
+    """
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return str(value)
+        text = format(Decimal(repr(value)), "f")
+        return text if "." in text else f"{text}.0"
     return str(value)
 
 

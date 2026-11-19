@@ -3,6 +3,7 @@
 from typing import Any
 
 from django.contrib.auth.models import Group, Permission
+from django.db import DEFAULT_DB_ALIAS
 
 VIEWERS = "Viewers"
 EDITORS = "Editors"
@@ -28,15 +29,16 @@ EDITOR_PERMISSIONS: list[str] = [
 ]
 
 
-def ensure_roles(**kwargs: Any) -> None:
+def ensure_roles(using: str = DEFAULT_DB_ALIAS, **kwargs: Any) -> None:
     """
     Create the role groups and set their permissions to exactly the defined
-    sets. Connected to post_migrate for the rules app, after Django has
-    created that app's permissions; safe to run any number of times.
+    sets in database `using` (post_migrate passes the database it migrated).
+    Connected to post_migrate for the rules app, after Django has created
+    that app's permissions; safe to run any number of times.
     """
     for name, codenames in ((VIEWERS, VIEWER_PERMISSIONS), (EDITORS, EDITOR_PERMISSIONS)):
-        permissions = Permission.objects.filter(
+        permissions = Permission.objects.using(using).filter(
             content_type__app_label="rules", codename__in=codenames
         )
-        group, _ = Group.objects.get_or_create(name=name)
+        group, _ = Group.objects.using(using).get_or_create(name=name)
         group.permissions.set(permissions)

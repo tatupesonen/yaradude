@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% load api_docs %}
+{% block title %}API{% endblock %}
+{% block content %}
+<div class="grid gap-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
+  {% include "api/includes/sidenav.html" %}
+  <div class="flex min-w-0 flex-col gap-5">
+    <div>
+      <h1>API</h1>
+      <p class="mt-0.5 max-w-3xl text-sm text-muted">Everything you can do in yaradude you can do from a script: JSON over HTTPS with a personal API key. A key acts as you, with your role's permissions, and changes made with it are recorded under your name.</p>
+    </div>
+
+    <section class="card" aria-labelledby="start-heading">
+      <div class="card-header"><h2 id="start-heading">Getting started</h2></div>
+      <div class="card-body flex flex-col gap-4 text-sm">
+        <dl class="meta-list">
+          <dt>Base URL</dt>
+          <dd class="font-mono break-all">{{ base_url }}/</dd>
+          <dt>Format</dt>
+          <dd>JSON requests and answers; uploads as <code>multipart/form-data</code>; downloads as files.</dd>
+          <dt>Description</dt>
+          <dd><a href="{% url 'api:docs_openapi' %}">OpenAPI 3.1 document</a> for tools (also at <code class="break-all">{{ base_url }}/openapi.json</code> with a key).</dd>
+        </dl>
+        <ol class="flex list-decimal flex-col gap-2 pl-5">
+          <li><a href="{% url 'api:keys' %}">Create an API key</a> on your API keys page. It is shown once; store it like a password.</li>
+          <li>Put it into the environment, so it never appears in scripts or shell history files:
+            <div class="code-block mt-1.5"><pre id="ex-export"><code>export YARADUDE_API_KEY='yd_…paste your key here…'</code></pre></div>
+          </li>
+          <li>Send it in the <code>Authorization</code> header of every request:
+            <div class="mt-1.5 flex items-start gap-2">
+              <div class="code-block min-w-0 flex-1"><pre id="ex-me"><code>curl -sS -H "Authorization: Bearer $YARADUDE_API_KEY" {{ base_url }}/me/</code></pre></div>
+              <button type="button" class="btn btn-sm" data-copy="#ex-me" hidden>Copy</button>
+            </div>
+          </li>
+        </ol>
+        <p class="text-muted">Only the header is accepted: the API ignores your browser session and cookies, so a signed-in browser cannot act on it, and API answers never set cookies.</p>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="python-heading">
+      <div class="card-header"><h2 id="python-heading">Python</h2><a class="btn btn-sm" href="{% url 'api:docs_client' %}">Download yaradude_client.py</a></div>
+      <div class="card-body flex flex-col gap-3 text-sm">
+        <p>The Python examples use <code>yaradude_client.py</code>, a small module that needs only the Python standard library (Python 3.9 or newer, no <code>requests</code>), so it runs on machines without internet access. Download it into the directory of your script; it is preset to <code class="break-all">{{ server_url }}</code> (override with <code>YARADUDE_URL</code>) and reads the key from <code>YARADUDE_API_KEY</code>.</p>
+        <div class="code-block"><pre><code>from yaradude_client import ApiError, call
+
+try:
+    page = call("GET", "/rules/", query={"q": "mimikatz"})
+except ApiError as error:
+    print(error.status, error.error["code"], error.error["message"])</code></pre></div>
+        <p class="text-muted">If the server's certificate comes from a private CA (such as the proxy's internal CA), give its certificate to Python with <code>SSL_CERT_FILE=/path/to/ca.pem</code> and to curl with <code>--cacert /path/to/ca.pem</code>. Never turn certificate checks off.</p>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="conventions-heading">
+      <div class="card-header"><h2 id="conventions-heading">Conventions</h2></div>
+      <div class="card-body flex flex-col gap-5 text-sm">
+        <div>
+          <h3 id="errors">Errors</h3>
+          <p class="mt-1">Every error is a JSON object with a stable <code>code</code> and a readable <code>message</code>; invalid fields are listed in <code>fields</code>:</p>
+          <div class="code-block mt-1.5"><pre><code>{"error": {"code": "invalid", "message": "The request is not valid.", "fields": {"text": ["This field is required."]}}}</code></pre></div>
+          <div class="table-wrap mt-2">
+            <table class="data-table">
+              <thead><tr><th scope="col">Status</th><th scope="col">Meaning</th></tr></thead>
+              <tbody>
+                <tr><td class="font-mono">400</td><td>Invalid request (<code>invalid</code>, <code>invalid_json</code>); <code>fields</code> says what to fix.</td></tr>
+                <tr><td class="font-mono">401</td><td>No key, or the key is malformed, unknown, revoked or expired, or your account is disabled. Comes with <code>WWW-Authenticate: Bearer</code>.</td></tr>
+                <tr><td class="font-mono">403</td><td>Your role does not allow this (<code>permission_denied</code>). Viewers browse, export and scan; Editors also import, create, edit and delete.</td></tr>
+                <tr><td class="font-mono">404</td><td>No such object or endpoint.</td></tr>
+                <tr><td class="font-mono">405</td><td>Wrong method; <code>Allow</code> lists the right ones.</td></tr>
+                <tr><td class="font-mono">409</td><td>Conflict: the rule changed since the version you sent (<code>version_conflict</code>, with <code>current_version</code>), or the rules directory is missing or empty.</td></tr>
+                <tr><td class="font-mono">413 / 415</td><td>Body too large / not sent as <code>application/json</code>.</td></tr>
+                <tr><td class="font-mono">422</td><td>The rule was refused (<code>rule_rejected</code>: does not parse or compile, or the name is taken; <code>result</code> holds the diagnostic and line) or the scan failed.</td></tr>
+                <tr><td class="font-mono">429</td><td>Rate limit reached; wait <code>Retry-After</code> seconds.</td></tr>
+                <tr><td class="font-mono">500</td><td>Server error; the details are in the server log, not in the answer.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h3 id="pagination">Pagination</h3>
+          <p class="mt-1">Lists answer one page: <code>{"count", "page", "pages", "page_size", "next", "previous", "results"}</code>. Rules, rulesets and tags come 100 per page, import runs 25, as in the UI. Follow <code>next</code> until it is <code>null</code>; a page number out of range gives the nearest page.</p>
+        </div>
+        <div>
+          <h3 id="filters">Search, filters and sorting</h3>
+          <p class="mt-1">The list endpoints take the same query parameters as the pages' filter forms and run the same queries, so a URL from the <a href="{% url 'rules:rule_list' %}">Rules</a> or <a href="{% url 'rules:ruleset_list' %}">Rulesets</a> page works with the API path too. A value the UI would ignore (an unknown sort key, for example) is ignored here as well rather than refused. <code>sort</code> takes a key with an optional <code>-</code> for descending.</p>
+        </div>
+        <div>
+          <h3 id="edits">Edits and deletes</h3>
+          <p class="mt-1">An edit sends the full rule text with the <code>version</code> it is based on; if someone changed the rule meanwhile, nothing is saved and the answer is 409. Deleting is always an explicit <code>DELETE</code> and cannot be undone.</p>
+        </div>
+        <div>
+          <h3 id="files">Uploads and downloads</h3>
+          <p class="mt-1">Rule files and scan samples are uploaded as <code>multipart/form-data</code> (curl <code>-F field=@file</code>). They are held in memory only; a sample is never stored or logged. Samples may be up to {{ scan_max|filesizeformat }}, rule files up to {{ rule_file_max|filesizeformat }} each. The API never takes a path on the server. Downloads are answered as files with <code>Content-Disposition</code>; <code>curl -OJ</code> saves them under that name.</p>
+        </div>
+        <div>
+          <h3 id="rate-limits">Rate limits</h3>
+          <p class="mt-1">{% if rate_limit %}Each key may make {{ rate_limit }} requests per {{ rate_window }} seconds, with bursts up to {{ rate_limit }}. Answers carry <code>RateLimit-Limit</code> and <code>RateLimit-Remaining</code>; over the limit the answer is 429 with <code>Retry-After</code>.{% else %}Rate limiting is switched off on this server.{% endif %}</p>
+        </div>
+      </div>
+    </section>
+
+    {% for group in groups %}
+    <section class="card" aria-labelledby="index-{{ group.slug }}">
+      <div class="card-header"><h2 id="index-{{ group.slug }}"><a href="{% url 'api:docs_group' group.slug %}">{{ group.title }}</a></h2><span class="text-xs text-muted">{{ group.intro|ticks }}</span></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th scope="col">Endpoint</th><th scope="col" class="hidden sm:table-cell">Does</th></tr></thead>
+          <tbody>
+            {% for e in group.endpoints %}
+            <tr>
+              <td><a class="font-mono text-xs break-all" href="{% url 'api:docs_group' group.slug %}#{{ e.anchor }}"><span class="font-semibold">{{ e.method }}</span> /api/v1{{ e.path }}</a><div class="text-xs text-muted sm:hidden">{{ e.summary }}</div></td>
+              <td class="hidden sm:table-cell">{{ e.summary }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

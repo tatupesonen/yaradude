@@ -1,0 +1,10 @@
+<nav aria-label="API documentation" class="lg:sticky lg:top-4 lg:self-start">
+  <p class="eyebrow mb-2 hidden lg:block">API</p>
+  <ul class="-mx-1 flex flex-wrap gap-1 lg:mx-0 lg:flex-col">
+    {% for item in nav %}
+    <li><a class="nav-link" href="{% if item.slug %}{% url 'api:docs_group' item.slug %}{% else %}{% url 'api:docs' %}{% endif %}"{% if item.active %} aria-current="page"{% endif %}>{{ item.title }}</a></li>
+    {% endfor %}
+    <li class="lg:mt-2 lg:border-t lg:border-line lg:pt-2"><a class="nav-link" href="{% url 'api:keys' %}"{% if nav_keys %} aria-current="page"{% endif %}>Your API keys</a></li>
+    <li><a class="nav-link" href="{% url 'api:docs_openapi' %}">OpenAPI document</a></li>
+  </ul>
+</nav>

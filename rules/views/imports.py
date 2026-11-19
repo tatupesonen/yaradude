@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from django.conf import settings
@@ -8,32 +9,38 @@ from django.views.generic import TemplateView, View
 from rules.forms import UploadForm
 from rules.models import ImportRun
 from rules.services import importer
-from rules.views.base import PermissionMixin, paginate
+from rules.services.importer import RuleFile
+from rules.views.base import PermissionMixin, current_user, paginate
 
 
-MAX_COUNTED_FILES = 10_000
+@dataclass(frozen=True)
+class DirectoryStatus:
+    """What a directory import would do, from importer.rule_files (display only)."""
+
+    exists: bool
+    importable: int = 0
+    skipped: list[RuleFile] = field(default_factory=list)
+
+    @property
+    def reasons(self) -> list[tuple[str, list[str]]]:
+        """Why files will be skipped: each reason with the paths it applies to."""
+        grouped: dict[str, list[str]] = {}
+        for file in self.skipped:
+            grouped.setdefault(file.error, []).append(file.identity)
+        return list(grouped.items())
 
 
-def count_rule_files(root: Path) -> int | None:
+def directory_status(root: Path) -> DirectoryStatus:
     """
-    How many files a directory import would read (same selection as
-    importer.import_directory: *.yar / *.yara, hidden paths skipped), for
-    display only; None if the directory does not exist. Stops counting at
-    MAX_COUNTED_FILES.
+    The rule files a directory import of `root` would process: the same
+    selection as importer.import_directory, so the counts agree with the run.
+    Files with an error (e.g. over the size limit) are recorded as failed.
     """
     if not root.is_dir():
-        return None
-    count = 0
-    for path in root.rglob("*"):
-        if (
-            path.suffix.lower() in importer.RULE_SUFFIXES
-            and not any(part.startswith(".") for part in path.relative_to(root).parts)
-            and path.is_file()
-        ):
-            count += 1
-            if count >= MAX_COUNTED_FILES:
-                break
-    return count
+        return DirectoryStatus(exists=False)
+    files = importer.rule_files(root)
+    skipped = [file for file in files if file.error]
+    return DirectoryStatus(exists=True, importable=len(files) - len(skipped), skipped=skipped)
 
 
 def _report(request, run: ImportRun) -> None:
@@ -54,8 +61,13 @@ class ImportView(PermissionMixin, TemplateView):
         return super().get_context_data(
             page=paginate(self.request, ImportRun.objects.select_related("user"), per_page=25),
             rules_dir=settings.YARADUDE_RULES_DIR,
-            rules_dir_files=count_rule_files(Path(settings.YARADUDE_RULES_DIR)),
-            max_counted_files=MAX_COUNTED_FILES,
+            # Only Editors see the directory card; listing the files costs a stat per file.
+            rules_dir_status=(
+                directory_status(Path(settings.YARADUDE_RULES_DIR))
+                if self.request.user.has_perm("rules.import_rules")
+                else None
+            ),
+            max_file_bytes=importer.max_file_bytes(),
             last_scan=ImportRun.objects.filter(origin=ImportRun.Origin.SCAN).first(),
             **kwargs,
         )
@@ -68,16 +80,17 @@ class ImportScanView(PermissionMixin, View):
     http_method_names = ["post"]
 
     def post(self, request):
-        files = count_rule_files(Path(settings.YARADUDE_RULES_DIR))
-        if not files:
-            messages.error(
-                request,
-                "The configured rules directory does not exist."
-                if files is None
-                else "The configured rules directory contains no .yar or .yara files.",
-            )
+        status = directory_status(Path(settings.YARADUDE_RULES_DIR))
+        if not status.importable:
+            if not status.exists:
+                message = "The configured rules directory does not exist."
+            elif status.skipped:
+                message = "No rule file in the configured rules directory can be imported."
+            else:
+                message = "The configured rules directory contains no .yar or .yara files."
+            messages.error(request, message)
             return redirect("rules:import")
-        run = importer.import_directory(settings.YARADUDE_RULES_DIR, user=request.user)
+        run = importer.import_directory(settings.YARADUDE_RULES_DIR, user=current_user(request))
         _report(request, run)
         return redirect(run.get_absolute_url())
 
@@ -93,7 +106,7 @@ class ImportUploadView(PermissionMixin, TemplateView):
             view = ImportView(request=request, kwargs={})
             context = view.get_context_data(upload_form=form)
             return self.render_to_response(context, status=400)
-        run = importer.import_uploads(form.cleaned_data["files"], user=request.user)
+        run = importer.import_uploads(form.cleaned_data["rule_files"], user=current_user(request))
         _report(request, run)
         return redirect(run.get_absolute_url())
 

@@ -28,7 +28,9 @@ class RulesetListTests(ViewTestCase):
         self.assertEqual(
             names(self.client.get(self.url, {"sort": "-rules"})), ["sample.yar", "zeta/other.yar"]
         )
-        self.assertEqual(names(self.client.get(self.url, {"sort": "bogus"})), ["sample.yar", "zeta/other.yar"])
+        self.assertEqual(
+            names(self.client.get(self.url, {"sort": "bogus"})), ["sample.yar", "zeta/other.yar"]
+        )
 
     def test_query_count_and_no_file_content(self):
         def run():
@@ -85,13 +87,40 @@ class RulesetDetailTests(ViewTestCase):
         self.login(self.editor)
         url = reverse("rules:ruleset_delete", args=[self.ruleset.pk])
         response = self.client.get(url)
-        self.assertContains(response, "cannot be undone")
-        self.assertContains(response, "version history")
-        response = self.client.post(url)
+        # Deletes are recoverable (PLAN.md 12.11): the page must not claim otherwise.
+        self.assertContains(response, "They are not destroyed")
+        self.assertContains(response, "can be restored")
+        self.assertNotContains(response, "cannot be undone")
+        self.assertNotContains(response, "Permanently")
+        response = self.client.post(url, follow=True)
         self.assertRedirects(response, reverse("rules:ruleset_list"))
+        self.assertContains(response, "hidden, not destroyed")
         self.assertFalse(Ruleset.objects.filter(pk=self.ruleset.pk).exists())
         self.assertFalse(Rule.objects.filter(ruleset_id=self.ruleset.pk).exists())
-        # The import history survives, without the ruleset link.
-        self.assertTrue(ImportFile.objects.filter(path="sample.yar", ruleset=None).exists())
+        self.assertEqual(Ruleset.all_objects.get(pk=self.ruleset.pk).deleted_by, self.editor)
+        self.assertEqual(Rule.all_objects.filter(ruleset_id=self.ruleset.pk).count(), 3)
+        self.assertEqual(self.client.get(self.ruleset.get_absolute_url()).status_code, 404)
+        # The import history keeps its link, shown without a link to the hidden ruleset.
+        self.assertTrue(ImportFile.objects.filter(path="sample.yar", ruleset=self.ruleset).exists())
         response = self.client.get(reverse("rules:import_run", args=[self.import_run.pk]))
-        self.assertContains(response, "ruleset since deleted")
+        self.assertContains(response, "(ruleset deleted)")
+        self.assertNotContains(response, f'href="{self.ruleset.get_absolute_url()}"')
+
+
+class DeletedRuleCountTests(ViewTestCase):
+    """Per-ruleset counts join rules without the default manager (PLAN.md 5.7)."""
+
+    def test_individually_deleted_rules_are_not_counted(self):
+        from rules.services import editing
+
+        editing.delete_rule(self.hello, user=self.editor)  # active, compiles
+        editing.delete_rule(self.broken, user=self.editor)  # active, does not compile
+        self.login(self.viewer)
+        response = self.client.get(reverse("rules:ruleset_list"))
+        (row,) = response.context["page"].object_list
+        self.assertEqual(row.active_count, 1)
+        self.assertEqual(row.failing_count, 0)
+        self.assertEqual(row.removed_count, 0)
+        response = self.client.get(self.ruleset.get_absolute_url())
+        self.assertEqual(response.context["ruleset"].active_count, 1)
+        self.assertNotContains(response, "not compiling")

@@ -7,10 +7,11 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import groupby
-from pathlib import PurePath
+from pathlib import PurePosixPath
 
 from rules.models import Rule, Ruleset
 from rules.services.compiler import build_source, combine_rules
+from rules.services.names import safe_member_path, single_line
 
 YAR_CONTENT_TYPE = "text/plain; charset=utf-8"
 
@@ -60,7 +61,8 @@ def export_combined(rules: Iterable[Rule]) -> ExportFile:
     if imports:
         parts.append("".join(f'import "{module}"\n' for module in imports))
     for ruleset, group in groups:
-        parts.append(f"// ---- {ruleset.name} ({ruleset.get_origin_display()}: {ruleset.path})\n")
+        label = single_line(f"{ruleset.name} ({ruleset.get_origin_display()}: {ruleset.path})")
+        parts.append(f"// ---- {label}\n")
         parts.extend(f"{rule.source}\n" for rule in group)
     return ExportFile("yaradude-rules.yar", "\n".join(parts).encode(), YAR_CONTENT_TYPE)
 
@@ -84,13 +86,15 @@ def ruleset_filename(ruleset: Ruleset, keep_directories: bool = False) -> str:
     """
     A safe file name for a ruleset ending in .yar or .yara. With
     `keep_directories`, rules-directory rulesets keep their relative path.
+    The result never holds control characters, backslashes, empty, "." or
+    ".." components, so it is safe as an archive member name.
     """
-    path = PurePath(ruleset.path)
+    path = PurePosixPath(ruleset.path)
+    fallback = f"ruleset-{ruleset.pk}"
     if keep_directories and ruleset.origin == Ruleset.Origin.DIRECTORY and not path.is_absolute():
-        parts = [part for part in path.parts if part not in ("", ".", "..")]
+        name = safe_member_path(ruleset.path, fallback)
     else:
-        parts = [path.name]
-    name = "/".join(parts) or f"ruleset-{ruleset.pk}"
+        name = safe_member_path(path.name, fallback)
     if not name.lower().endswith((".yar", ".yara")):
         name += ".yar"
     return name
@@ -98,7 +102,7 @@ def ruleset_filename(ruleset: Ruleset, keep_directories: bool = False) -> str:
 
 def _grouped(rules: Iterable[Rule]) -> list[tuple[Ruleset, list[Rule]]]:
     rules = sorted(
-        (rule for rule in rules if not rule.is_removed),
+        (rule for rule in rules if not rule.is_removed and not rule.is_deleted),
         key=lambda r: (r.ruleset.name, r.ruleset_id, r.position, r.pk),
     )
     groups = (list(group) for _, group in groupby(rules, key=lambda r: r.ruleset_id))

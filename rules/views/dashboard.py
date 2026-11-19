@@ -24,7 +24,8 @@ class DashboardView(PermissionMixin, TemplateView):
         return super().get_context_data(
             counts=counts,
             ruleset_count=Ruleset.objects.count(),
-            tag_count=Tag.objects.count(),
+            # Tags of rules that are not deleted (the join bypasses the default manager).
+            tag_count=Tag.objects.filter(rules__deleted_at__isnull=True).distinct().count(),
             recent_runs=ImportRun.objects.select_related("user")[:6],
             recent_rules=(
                 Rule.objects.active()

@@ -58,12 +58,20 @@ class ViewTestCase(TestCase):
         cls.hello = Rule.objects.get(name="hello_world")
         cls.broken = Rule.objects.get(name="broken_rule")
         cls.pe_rule = Rule.objects.get(name="pe_rule")
-        cls.import_run = ImportRun.objects.create(origin=ImportRun.Origin.UPLOAD, source="sample.yar")
-        ImportFile.objects.create(
-            run=cls.import_run, path="sample.yar", status=ImportFile.Status.CREATED, ruleset=cls.ruleset
+        cls.import_run = ImportRun.objects.create(
+            origin=ImportRun.Origin.UPLOAD, source="sample.yar"
         )
         ImportFile.objects.create(
-            run=cls.import_run, path="bad.yar", status=ImportFile.Status.FAILED, message="line 1: oops"
+            run=cls.import_run,
+            path="sample.yar",
+            status=ImportFile.Status.CREATED,
+            ruleset=cls.ruleset,
+        )
+        ImportFile.objects.create(
+            run=cls.import_run,
+            path="bad.yar",
+            status=ImportFile.Status.FAILED,
+            message="line 1: oops",
         )
 
     @classmethod
@@ -118,7 +126,7 @@ class ShellTests(ViewTestCase):
     def test_messages_are_rendered(self):
         self.login(self.editor)
         response = self.client.post(
-            reverse("rules:rule_restore", args=[self.hello.pk, 1]), follow=True
+            reverse("rules:rule_restore", args=[self.hello.pk, 1]), {"version": 1}, follow=True
         )
         self.assertContains(response, 'role="status"')
 
@@ -179,9 +187,7 @@ class AccountPageTests(ViewTestCase):
 
     def test_password_change_requires_login(self):
         response = self.client.get(reverse("password_change"))
-        self.assertRedirects(
-            response, f"{reverse('login')}?next={reverse('password_change')}"
-        )
+        self.assertRedirects(response, f"{reverse('login')}?next={reverse('password_change')}")
 
     def test_user_menu_links_password_change(self):
         self.login(self.viewer)

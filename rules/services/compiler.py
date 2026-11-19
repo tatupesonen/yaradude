@@ -8,6 +8,8 @@ error with line numbers relative to its standalone text, and a failing rule
 does not hide the errors of the rules after it.
 """
 
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass, field
 from functools import cache
@@ -18,6 +20,7 @@ from django.conf import settings
 from django.db import transaction
 
 from rules.models import Rule, Ruleset
+from rules.services import revision
 from rules.services.parser import ParsedRule, referenced_names, rule_text
 
 _UNKNOWN_IDENTIFIER = re.compile(r"unknown identifier `([^`]+)`")
@@ -99,19 +102,28 @@ class RuleDiagnostics:
 
 
 @dataclass(frozen=True)
-class _Entry:
+class RuleEntry:
+    """The content of one rule as the compiler sees it."""
+
     name: str
     imports: list[str]
     source: str
 
+    @classmethod
+    def of(cls, rule: Rule) -> RuleEntry:
+        return cls(rule.name, rule.imports, rule.source)
 
-def _missing_imports(entry: _Entry) -> list[str]:
+
+def _missing_imports(entry: RuleEntry) -> list[str]:
     used = referenced_names(entry.source) & available_modules()
     return sorted(used - set(entry.imports))
 
 
-def _compile_entries(entries: list[_Entry]) -> list[RuleDiagnostics]:
-    """Compile rules in order in one namespace; one result per entry."""
+def compile_entries(entries: list[RuleEntry]) -> list[RuleDiagnostics]:
+    """
+    Compile rules in order in one namespace; one result per entry. Pure: no
+    database access, so callers run it outside their write transaction.
+    """
     compiler = new_compiler()
     errors: dict[str, tuple[str, int | None]] = {}
     for entry in entries:
@@ -179,28 +191,61 @@ class RulesetCheck:
         return f"{len(failing)} of {len(self.diagnostics)} rules do not compile: {names}"
 
 
-def check_ruleset(ruleset: Ruleset) -> RulesetCheck:
+def ruleset_entries(ruleset: Ruleset) -> tuple[list[Rule], list[Rule]]:
+    """All rules of a ruleset in compile order, and the active ones among them."""
+    rules = list(ruleset.rules.order_by("position", "pk"))
+    return rules, [rule for rule in rules if not rule.is_removed]
+
+
+def check_ruleset(ruleset: Ruleset, *, changed: bool = False) -> RulesetCheck:
     """
     Compile the active rules of a ruleset and store the results: each rule's
     own `compile_error` and `compile_warnings`, and a summary in
     `Ruleset.compile_error`. Removed rules are not compiled and are cleared.
+    `changed` tells it that the caller changed the ruleset's rules in the
+    current transaction (see store_check).
     """
-    rules = list(ruleset.rules.order_by("position", "pk"))
+    rules, active = ruleset_entries(ruleset)
+    return store_check(
+        ruleset, rules, compile_entries([RuleEntry.of(r) for r in active]), changed=changed
+    )
+
+
+def store_check(
+    ruleset: Ruleset,
+    rules: list[Rule],
+    results: list[RuleDiagnostics],
+    *,
+    changed: bool = False,
+) -> RulesetCheck:
+    """
+    Store diagnostics computed by `compile_entries` for the active rules among
+    `rules` (all rules of the ruleset, in compile order). Writers compile
+    outside their transaction, then call this inside it after checking that
+    the active rules are still exactly what was compiled.
+
+    Every write that changes rules ends here, which makes this the place the
+    rules revision moves: when the caller says the rules `changed`, or when a
+    rule starts or stops compiling. A re-check that changes nothing leaves it.
+    """
     active = [rule for rule in rules if not rule.is_removed]
-    results = _compile_entries([_Entry(r.name, r.imports, r.source) for r in active])
     check = RulesetCheck(ruleset, dict(zip(active, results, strict=True)))
 
-    changed: list[Rule] = []
+    updated: list[Rule] = []
+    compiling_changed = False
     for rule in rules:
         result = check.diagnostics.get(rule, RuleDiagnostics(rule.name))
         if (rule.compile_error, rule.compile_warnings) != (result.error, result.warnings):
+            compiling_changed |= bool(rule.compile_error) != bool(result.error)
             rule.compile_error, rule.compile_warnings = result.error, result.warnings
-            changed.append(rule)
+            updated.append(rule)
     with transaction.atomic():
-        Rule.objects.bulk_update(changed, ["compile_error", "compile_warnings"])
+        Rule.objects.bulk_update(updated, ["compile_error", "compile_warnings"])
         if ruleset.compile_error != check.summary:
             ruleset.compile_error = check.summary
             ruleset.save(update_fields=["compile_error"])
+        if changed or compiling_changed:
+            revision.bump()
     return check
 
 
@@ -234,19 +279,44 @@ def validate_edit(ruleset: Ruleset, rule: Rule | None, parsed: ParsedRule) -> Ed
     """
     Compile a proposed rule in the context of the ruleset's other active
     rules: in place of `rule` when editing, after the last rule when creating.
-    Does not write to the database.
+    Does not write to the database. An unsaved ruleset has no other rules.
     """
-    siblings = list(ruleset.rules.active().order_by("position", "pk"))
-    if rule is not None:
-        siblings = [sibling for sibling in siblings if sibling.pk != rule.pk]
-    proposed = _Entry(parsed.name, parsed.imports, parsed.source)
-    position = rule.position if rule is not None else None
-    before = [s for s in siblings if position is None or s.position <= position]
-    after = [s for s in siblings if position is not None and s.position > position]
-    ordered = [*before, None, *after]
+    return plan_edit(ruleset, rule, parsed).validation
 
-    entries = [proposed if s is None else _Entry(s.name, s.imports, s.source) for s in ordered]
-    results = _compile_entries(entries)
+
+@dataclass(frozen=True)
+class EditPlan:
+    """
+    validate_edit's result plus what it compiled: the ruleset's active rules
+    after the edit (`entries`, in compile order) and their diagnostics, so a
+    save can store them without compiling again while it holds the lock.
+    """
+
+    validation: EditValidation
+    entries: list[RuleEntry]
+    results: list[RuleDiagnostics]
+
+
+def plan_edit(ruleset: Ruleset, rule: Rule | None, parsed: ParsedRule) -> EditPlan:
+    """validate_edit, keeping the compiled entries and results (see EditPlan)."""
+    siblings = list(ruleset.rules.active().order_by("position", "pk")) if ruleset.pk else []
+    proposed = RuleEntry(parsed.name, parsed.imports, parsed.source)
+    # The same order check_ruleset uses after the save: by (position, pk),
+    # the edited rule in its place, a new rule last.
+    ordered: list[Rule | None]
+    if rule is None:
+        ordered = [*siblings, None]
+    else:
+        others = [sibling for sibling in siblings if sibling.pk != rule.pk]
+        key = (rule.position, rule.pk)
+        ordered = [
+            *(s for s in others if (s.position, s.pk) < key),
+            None,
+            *(s for s in others if (s.position, s.pk) > key),
+        ]
+
+    entries = [proposed if s is None else RuleEntry.of(s) for s in ordered]
+    results = compile_entries(entries)
     own = results[ordered.index(None)]
     broken = [
         BrokenRule(sibling, result.error)
@@ -254,7 +324,8 @@ def validate_edit(ruleset: Ruleset, rule: Rule | None, parsed: ParsedRule) -> Ed
         if sibling is not None and not result.ok and sibling.compiles
     ]
     line = parsed.parsed_line(own.line) if own.line is not None else None
-    return EditValidation(error=own.error, line=line, warnings=own.warnings, broken=broken)
+    validation = EditValidation(error=own.error, line=line, warnings=own.warnings, broken=broken)
+    return EditPlan(validation, entries, results)
 
 
 def build_source(ruleset: Ruleset) -> str:
