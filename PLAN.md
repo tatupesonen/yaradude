@@ -1088,6 +1088,24 @@ Acceptance for the air gap: the loaded stack starts and serves the login page
 over HTTPS on a Docker network with no outbound connectivity, and the browser
 makes no request to any other origin.
 
+### 8.6 Feasibility check for the offline dev and build images
+Checked on 2026-11-19, before any container work; nothing here is built yet.
+- All 24 packages in `uv.lock` install without a compiler on Linux: 20 are
+  pure Python and the three native ones (`yara-x`, `ruff`, `ty`) publish
+  wheels for both linux amd64 and arm64.
+- The Tailwind standalone binary is published for linux x64 and arm64 with
+  checksums (section 7.3), so it can be baked into the dev image.
+- Docker on the development Mac can build both `linux/amd64` and
+  `linux/arm64` images.
+- The stack now has three kinds of process on one image — the ASGI web
+  server (uvicorn), the task workers, and Caddy in front — so sections 8.2
+  and 8.3 need updating from gunicorn to that shape when this is built.
+- Still to prove by doing: that `docker build` resolves `FROM` images from
+  the local store with no registry reachable, that `uv sync --offline` works
+  from a wheel cache baked into the dev image, and that the Tailwind binary
+  makes no network calls (all three via builds and runs with networking
+  disabled).
+
 ### 8.5 Building the production images inside the air gap
 After code changes made on the air-gapped side, `docker compose build` (or an
 equivalent documented script) must produce new production images there with
