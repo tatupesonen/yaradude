@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% load yaradude %}
+{% block title %}Import{% endblock %}
+{% block content %}
+<div class="mb-5">
+  <h1>Import</h1>
+  <p class="mt-0.5 text-sm text-muted">Bring rules in from the server's rules directory or from files on your computer. Unchanged files are skipped; local edits survive as long as the file's version of a rule has not changed.</p>
+</div>
+
+{% if perms.rules.import_rules %}
+<div class="mb-6 grid gap-5 lg:grid-cols-2">
+  <section class="card flex flex-col" aria-labelledby="scan-heading">
+    <div class="card-header"><h2 id="scan-heading">Rules directory</h2></div>
+    <form method="post" action="{% url 'rules:import_scan' %}" class="card-body flex flex-1 flex-col gap-4" data-busy>
+      {% csrf_token %}
+      <p class="text-sm text-muted">Imports every <code>.yar</code> and <code>.yara</code> file below the server's rules directory; hidden files are skipped and files missing from disk change nothing.</p>
+      <dl class="meta-list">
+        <dt>Directory</dt>
+        <dd class="font-mono text-xs break-all">{{ rules_dir }}</dd>
+        <dt>Rule files</dt>
+        <dd>{% if rules_dir_files is None %}<span class="badge badge-error">Directory not found</span>{% elif rules_dir_files == 0 %}<span class="badge badge-warn">No .yar / .yara files</span>{% else %}{{ rules_dir_files }}{% if rules_dir_files >= max_counted_files %}+{% endif %} file{{ rules_dir_files|pluralize }}{% endif %}</dd>
+        <dt>Last scan</dt>
+        <dd>{% if last_scan %}<a href="{{ last_scan.get_absolute_url }}">{{ last_scan.started_at|ts }}</a><div class="text-xs text-muted">{{ last_scan.files_changed }} changed, {{ last_scan.files_unchanged }} unchanged{% if last_scan.files_failed %}, <span class="text-error">{{ last_scan.files_failed }} failed</span>{% endif %}</div>{% else %}<span class="text-faint">never</span>{% endif %}</dd>
+      </dl>
+      {% if not rules_dir_files %}<p class="help mt-0">{% if rules_dir_files is None %}The directory is configured with YARADUDE_RULES_DIR; ask an administrator to mount or create it.{% else %}Put rule files into the directory, or use the upload instead.{% endif %}</p>{% endif %}
+      <div class="mt-auto"><button type="submit" class="btn btn-primary" data-busy-label="Importing…"{% if not rules_dir_files %} disabled{% endif %}>Scan and import</button></div>
+    </form>
+  </section>
+
+  <section class="card flex flex-col" aria-labelledby="upload-heading">
+    <div class="card-header"><h2 id="upload-heading">Upload files</h2></div>
+    <form method="post" action="{% url 'rules:import_upload' %}" enctype="multipart/form-data" class="card-body flex flex-1 flex-col gap-4" data-busy>
+      {% csrf_token %}
+      {% with field=upload_form.files %}
+      <div class="dropzone" data-dropzone>
+        <p class="font-medium text-fg">Drop <code>.yar</code> / <code>.yara</code> files here</p>
+        <p>or</p>
+        {{ field }}
+        <label for="{{ field.id_for_label }}" class="btn cursor-pointer peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--yd-focus)]">Choose files…</label>
+        <p class="text-xs text-fg" data-file-list aria-live="polite"></p>
+      </div>
+      <p class="help" id="{{ field.id_for_label }}-help">{{ field.help_text }}</p>
+      {% if field.errors %}<p class="field-error" role="alert">{{ field.errors|join:" " }}</p>{% endif %}
+      {% endwith %}
+      <div class="mt-auto"><button type="submit" class="btn btn-primary" data-busy-label="Uploading…">Upload and import</button></div>
+    </form>
+  </section>
+</div>
+{% endif %}
+
+<section class="card" aria-labelledby="history-heading">
+  <div class="card-header"><h2 id="history-heading">Import history</h2></div>
+  {% if page.object_list %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Started</th>
+          <th scope="col">Origin</th>
+          <th scope="col" class="hidden lg:table-cell">Source</th>
+          <th scope="col" class="num">Files</th>
+          <th scope="col" class="num">New</th>
+          <th scope="col" class="num">Updated</th>
+          <th scope="col" class="num">Removed</th>
+          <th scope="col" class="num">Failed</th>
+          <th scope="col" class="hidden md:table-cell">By</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in page.object_list %}
+        <tr>
+          <td><a href="{{ run.get_absolute_url }}">{{ run.started_at|ts:"short" }}</a></td>
+          <td>{{ run.get_origin_display }}</td>
+          <td class="hidden max-w-80 truncate font-mono text-xs text-muted lg:table-cell" title="{{ run.source }}">{{ run.source }}</td>
+          <td class="num">{{ run.files_seen }}</td>
+          <td class="num{% if run.rules_created %} text-ok{% endif %}">{{ run.rules_created }}</td>
+          <td class="num">{{ run.rules_updated }}</td>
+          <td class="num{% if run.rules_removed %} text-removed{% endif %}">{{ run.rules_removed }}</td>
+          <td class="num{% if run.files_failed %} font-semibold text-error{% endif %}">{{ run.files_failed }}</td>
+          <td class="hidden text-muted md:table-cell">{{ run.user.get_username|default:"—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "rules/includes/pager.html" %}
+  {% else %}
+  <div class="empty"><p>No imports have run yet.</p>{% if perms.rules.import_rules %}<p>Use the directory scan or the upload above.</p>{% endif %}</div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Not found{% endblock %}
+{% block content %}
+<div class="mx-auto mt-6 max-w-xl sm:mt-16">
+  <p class="eyebrow">Error 404</p>
+  <h1 class="mt-1 text-2xl">This page does not exist</h1>
+  <p class="mt-3 text-muted">The address may be mistyped, or the rule or ruleset it points to has been deleted.</p>
+  <div class="mt-6 flex flex-wrap gap-2">
+    {% if user.is_authenticated %}<a class="btn btn-primary" href="{% url 'rules:rule_list' %}">Search the rules</a><a class="btn" href="{% url 'rules:dashboard' %}">Dashboard</a>{% else %}<a class="btn btn-primary" href="{% url 'login' %}">Sign in</a>{% endif %}
+  </div>
+</div>
+{% endblock %}

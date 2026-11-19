@@ -1,0 +1,68 @@
+{% load static yaradude %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}yaradude{% endblock %} · yaradude</title>
+  <link rel="icon" href="{% static 'rules/img/favicon.svg' %}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'rules/css/yaradude.css' %}">
+  <script src="{% static 'rules/js/app.js' %}" defer></script>
+</head>
+<body class="flex min-h-screen flex-col">
+  <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-surface focus:px-3 focus:py-2 focus:shadow-md">Skip to content</a>
+  {% nav_section as section %}
+  <header class="border-b border-line bg-surface">
+    <div class="page flex flex-wrap items-center gap-x-6 gap-y-1 py-2 md:h-14 md:flex-nowrap md:py-0">
+      <a href="{% if user.is_authenticated %}{% url 'rules:dashboard' %}{% else %}{% url 'login' %}{% endif %}" class="flex items-center gap-2 text-fg no-underline hover:no-underline">
+        <img src="{% static 'rules/img/mark.svg' %}" alt="" width="24" height="24" class="size-6">
+        <span class="text-lg font-semibold tracking-tight">yaradude</span>
+      </a>
+      {% if user.is_authenticated %}
+      <nav aria-label="Main" class="order-last -mx-1 flex w-full flex-wrap gap-1 pb-1 md:order-none md:mx-0 md:w-auto md:flex-nowrap md:pb-0">
+        <a class="nav-link" href="{% url 'rules:dashboard' %}"{% if section == 'dashboard' %} aria-current="page"{% endif %}>Dashboard</a>
+        <a class="nav-link" href="{% url 'rules:rule_list' %}"{% if section == 'rules' %} aria-current="page"{% endif %}>Rules</a>
+        <a class="nav-link" href="{% url 'rules:ruleset_list' %}"{% if section == 'rulesets' %} aria-current="page"{% endif %}>Rulesets</a>
+        <a class="nav-link" href="{% url 'rules:import' %}"{% if section == 'import' %} aria-current="page"{% endif %}>Import</a>
+        <a class="nav-link" href="{% url 'rules:scan' %}"{% if section == 'scan' %} aria-current="page"{% endif %}>Test scan</a>
+      </nav>
+      <details class="menu relative ml-auto text-sm" data-menu>
+        <summary class="nav-link cursor-pointer list-none" aria-label="Account menu for {{ user.get_username }}">
+          <span class="flex size-6 items-center justify-center rounded-full bg-accent-soft text-xs font-semibold text-accent-strong uppercase" aria-hidden="true">{{ user.get_username|slice:":1" }}</span>
+          <span class="max-w-32 truncate">{{ user.get_username }}</span>
+          <span aria-hidden="true" class="text-faint">▾</span>
+        </summary>
+        <div class="absolute right-0 z-20 mt-1 flex w-52 flex-col gap-0.5 rounded-lg border border-line bg-surface p-1 shadow-lg">
+          <a class="nav-link" href="{% url 'password_change' %}">Change password</a>
+          {% if user.is_staff %}<a class="nav-link" href="{% url 'admin:index' %}">Administration</a>{% endif %}
+          <form method="post" action="{% url 'logout' %}" class="border-t border-line pt-0.5">
+            {% csrf_token %}
+            <button type="submit" class="nav-link w-full cursor-pointer">Sign out</button>
+          </form>
+        </div>
+      </details>
+      {% endif %}
+    </div>
+  </header>
+
+  <main id="main" class="page flex-1 py-6" tabindex="-1">
+    {% if messages %}
+    <ul class="mb-5 flex flex-col gap-2" aria-label="Messages">
+      {% for message in messages %}
+      <li class="alert {% if message.level_tag == 'error' %}alert-error{% elif message.level_tag == 'warning' %}alert-warning{% elif message.level_tag == 'success' %}alert-success{% else %}alert-info{% endif %}" role="{% if message.level_tag == 'error' %}alert{% else %}status{% endif %}">
+        <span>{{ message }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="border-t border-line py-4 text-xs text-faint">
+    <div class="page flex flex-wrap justify-between gap-2">
+      <span>yaradude · YARA rule management</span>
+      <span>Times in {% now "T" %}</span>
+    </div>
+  </footer>
+</body>
+</html>

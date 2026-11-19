@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% load yaradude %}
+{% block title %}{{ rule.name }} v{{ version.number }}{% endblock %}
+{% block content %}
+<nav aria-label="Breadcrumb" class="mb-2 text-sm text-muted">
+  <a href="{% url 'rules:rule_list' %}">Rules</a> <span aria-hidden="true">/</span>
+  <a href="{{ rule.ruleset.get_absolute_url }}">{{ rule.ruleset.name }}</a> <span aria-hidden="true">/</span>
+  <a class="font-mono" href="{{ rule.get_absolute_url }}">{{ rule.name }}</a>
+</nav>
+<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+  <div>
+    <h1><span class="font-mono">{{ rule.name }}</span> · version {{ version.number }}</h1>
+    <p class="mt-1 text-sm text-muted">{{ version.get_origin_display }} {{ version.created_at|ts }}{% if version.created_by %} by {{ version.created_by.get_username }}{% elif version.import_run %} by <a href="{{ version.import_run.get_absolute_url }}">an import run</a>{% endif %}</p>
+  </div>
+  <div class="flex flex-wrap items-center gap-2">
+    {% if previous %}<a class="btn btn-sm" href="{{ previous.get_absolute_url }}" rel="prev">← v{{ previous.number }}</a>{% endif %}
+    {% if next_version %}<a class="btn btn-sm" href="{{ next_version.get_absolute_url }}" rel="next">v{{ next_version.number }} →</a>{% endif %}
+    {% if perms.rules.change_rule %}
+      {% if is_current %}
+      <span class="badge badge-neutral">Same as the current content</span>
+      {% else %}
+      <form method="post" action="{% url 'rules:rule_restore' rule.pk version.number %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary">Restore this version</button>
+      </form>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+<div class="flex flex-col gap-5">
+  <section class="card" aria-labelledby="diff-heading">
+    <div class="card-header">
+      <h2 id="diff-heading">{% if previous %}Changes since version {{ previous.number }}{% else %}First version{% endif %}</h2>
+      {% if diff.changed %}<span class="text-xs"><span class="text-ok">+{{ diff.added }}</span> <span class="text-error">−{{ diff.removed }}</span></span>{% endif %}
+    </div>
+    {% if diff.changed %}
+    <div class="table-wrap">
+      <table class="diff">
+        <caption class="sr-only">Unified diff; added lines are marked +, removed lines −</caption>
+        <tbody>
+          {% for line in diff.lines %}
+          {% if line.kind == "hunk" %}
+          <tr class="hunk"><td colspan="4">{{ line.text }}</td></tr>
+          {% else %}
+          <tr class="{{ line.kind }}">
+            <td class="ln">{{ line.old_number|default:"" }}</td>
+            <td class="ln">{{ line.new_number|default:"" }}</td>
+            <td class="mark">{% if line.kind == "added" %}<span class="text-ok">+</span>{% elif line.kind == "removed" %}<span class="text-error">−</span>{% else %} {% endif %}</td>
+            <td>{{ line.text }}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty">{% if previous %}The text is identical to version {{ previous.number }}.{% else %}No earlier version to compare with.{% endif %}</p>
+    {% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="source-heading">
+    <div class="card-header py-2"><h2 id="source-heading" class="text-base">Source of version {{ version.number }}</h2><span class="font-mono text-xs text-faint">{{ version.sha256|truncatechars:17 }}</span></div>
+    <div class="bg-code">{{ version.text|highlight:"linenos" }}</div>
+  </section>
+</div>
+{% endblock %}

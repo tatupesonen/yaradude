@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% load yaradude %}
+{% block title %}{{ rule.name }}{% endblock %}
+{% block content %}
+<nav aria-label="Breadcrumb" class="mb-2 text-sm text-muted">
+  <a href="{% url 'rules:rule_list' %}">Rules</a> <span aria-hidden="true">/</span>
+  <a href="{{ rule.ruleset.get_absolute_url }}">{{ rule.ruleset.name }}</a>
+</nav>
+<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+  <div class="min-w-0">
+    <h1 class="font-mono break-all">{{ rule.name }}</h1>
+    <div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
+      {% rule_status rule %}
+      {% if rule.is_private %}<span class="badge badge-neutral">private</span>{% endif %}
+      {% if rule.is_global %}<span class="badge badge-neutral">global</span>{% endif %}
+      <span class="text-muted">version {{ rule.version }}</span>
+    </div>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    {% if perms.rules.change_rule %}<a class="btn btn-primary" href="{% url 'rules:rule_edit' rule.pk %}">Edit</a>{% endif %}
+    <a class="btn" href="{% url 'rules:rule_download' rule.pk %}">Download .yar</a>
+    {% if perms.rules.delete_rule %}<a class="btn btn-ghost text-error" href="{% url 'rules:rule_delete' rule.pk %}" title="Permanently deletes the rule and its version history; cannot be undone">Delete rule and history…</a>{% endif %}
+  </div>
+</div>
+
+{% if rule.removed_at %}
+<div class="alert alert-warning mb-4" role="status"><span>This rule was dropped from its source file on {{ rule.removed_at|ts }}. It is kept with its history but left out of exports and scans, and comes back automatically if it reappears in the file.</span></div>
+{% endif %}
+
+<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+  <div class="flex min-w-0 flex-col gap-5">
+    {% if rule.compile_error %}
+    <section aria-labelledby="error-heading">
+      <h2 id="error-heading" class="mb-2 text-error">Does not compile</h2>
+      <pre class="diagnostic">{{ rule.compile_error }}</pre>
+      <p class="help">Line numbers refer to the source below.</p>
+    </section>
+    {% endif %}
+    {% if rule.compile_warnings %}
+    <section aria-labelledby="warn-heading">
+      <h2 id="warn-heading" class="mb-2 text-warn">{{ rule.compile_warnings|length }} warning{{ rule.compile_warnings|pluralize }}</h2>
+      <div class="flex flex-col gap-2">{% for warning in rule.compile_warnings %}<pre class="diagnostic diagnostic-warn">{{ warning }}</pre>{% endfor %}</div>
+    </section>
+    {% endif %}
+
+    <section class="card" aria-labelledby="source-heading">
+      <div class="card-header py-2">
+        <h2 id="source-heading" class="text-base">Source</h2>
+        <button type="button" class="btn btn-sm btn-ghost" data-copy="#rule-source" hidden>Copy</button>
+      </div>
+      <div class="bg-code">{{ rule.text|highlight:"linenos" }}</div>
+      <textarea id="rule-source" class="sr-only" readonly tabindex="-1" aria-hidden="true">{{ rule.text }}</textarea>
+    </section>
+
+    <section class="card" aria-labelledby="versions-heading">
+      <div class="card-header"><h2 id="versions-heading">Version history</h2></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th scope="col">Version</th><th scope="col">Change</th><th scope="col">When</th><th scope="col">By</th></tr></thead>
+          <tbody>
+            {% for version in versions %}
+            <tr>
+              <td><a class="font-mono" href="{{ version.get_absolute_url }}">v{{ version.number }}</a>{% if version.number == rule.version %} <span class="badge badge-neutral">current</span>{% endif %}</td>
+              <td>{{ version.get_origin_display }}</td>
+              <td>{{ version.created_at|ts }}</td>
+              <td class="text-muted">{% if version.created_by %}{{ version.created_by.get_username }}{% elif version.import_run %}<a href="{{ version.import_run.get_absolute_url }}">import run</a>{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <aside class="flex flex-col gap-5">
+    <section class="card card-body" aria-labelledby="details-heading">
+      <h2 id="details-heading" class="mb-3 text-base">Details</h2>
+      <dl class="meta-list">
+        <dt>Ruleset</dt><dd><a href="{{ rule.ruleset.get_absolute_url }}">{{ rule.ruleset.name }}</a></dd>
+        <dt>Origin</dt><dd>{{ rule.ruleset.get_origin_display }}</dd>
+        <dt>Tags</dt><dd>{% for tag in rule.tags.all %}<a class="tag mr-1" href="{% url 'rules:rule_list' %}?tag={{ tag.name|urlencode }}">{{ tag.name }}</a>{% empty %}<span class="text-faint">none</span>{% endfor %}</dd>
+        <dt>Imports</dt><dd class="font-mono text-xs">{% for module in rule.imports %}{{ module }}{% if not forloop.last %}, {% endif %}{% empty %}<span class="font-sans text-faint">none</span>{% endfor %}</dd>
+        <dt>First imported</dt><dd>{{ rule.created_at|ts }}</dd>
+        <dt>Last changed</dt><dd>{{ rule.updated_at|ts }}</dd>
+        <dt>SHA-256</dt><dd>{% include "rules/includes/hash.html" with value=rule.sha256 id="rule-sha256" label="SHA-256" %}</dd>
+        {% if rule.is_modified %}<dt>As imported</dt><dd>{% include "rules/includes/hash.html" with value=rule.imported_sha256 id="rule-imported-sha256" label="imported SHA-256" extra_class="text-modified" %}</dd>{% endif %}
+      </dl>
+    </section>
+    <section class="card card-body" aria-labelledby="meta-heading">
+      <h2 id="meta-heading" class="mb-3 text-base">Meta</h2>
+      {% if rule.meta %}
+      <dl class="meta-list">
+        {% for pair in rule.meta %}<dt class="font-mono text-xs">{{ pair.0 }}</dt><dd class="text-sm break-words">{{ pair.1|meta_value }}</dd>{% endfor %}
+      </dl>
+      {% else %}<p class="text-sm text-faint">This rule has no meta section.</p>{% endif %}
+    </section>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% load yaradude %}
+{% block title %}{{ ruleset.name }}{% endblock %}
+{% block content %}
+<nav aria-label="Breadcrumb" class="mb-2 text-sm text-muted"><a href="{% url 'rules:ruleset_list' %}">Rulesets</a></nav>
+<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+  <div class="min-w-0">
+    <h1 class="font-mono break-all">{{ ruleset.name }}</h1>
+    <div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
+      {% if ruleset.failing_count %}<span class="badge badge-error">{{ ruleset.failing_count }} of {{ ruleset.active_count }} not compiling</span>{% elif ruleset.active_count %}<span class="badge badge-ok">Compiles</span>{% else %}<span class="badge badge-neutral">Empty</span>{% endif %}
+      <span class="text-muted">{{ ruleset.get_origin_display }} · {{ ruleset.active_count }} rule{{ ruleset.active_count|pluralize }}{% if ruleset.removed_count %} · {{ ruleset.removed_count }} removed{% endif %}</span>
+    </div>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    {% if perms.rules.add_rule %}<a class="btn" href="{% url 'rules:rule_create' %}?ruleset={{ ruleset.pk }}">Add rule</a>{% endif %}
+    <a class="btn" href="{% url 'rules:ruleset_download' ruleset.pk %}" title="Current active rules, rebuilt">Download .yar</a>
+    {% if has_original %}<a class="btn" href="{% url 'rules:ruleset_original' ruleset.pk %}" title="The file exactly as last imported">Original file</a>{% endif %}
+    <a class="btn" href="{% url 'rules:rule_list' %}?ruleset={{ ruleset.pk }}&amp;status=all">Search in ruleset</a>
+    {% if perms.rules.delete_ruleset %}<a class="btn btn-ghost text-error" href="{% url 'rules:ruleset_delete' ruleset.pk %}" title="Permanently deletes the ruleset, its rules and their history; cannot be undone">Delete ruleset and history…</a>{% endif %}
+  </div>
+</div>
+
+{% if ruleset.compile_error %}
+<div class="alert alert-error mb-4" role="status"><span>{{ ruleset.compile_error }}</span></div>
+{% endif %}
+
+<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+  <section class="card min-w-0" aria-labelledby="rules-heading">
+    <div class="card-header"><h2 id="rules-heading">Rules</h2><span class="text-xs text-muted">in file order</span></div>
+    {% if rules %}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th scope="col" class="num">#</th><th scope="col">Name</th><th scope="col" class="hidden md:table-cell">Tags</th><th scope="col">Status</th><th scope="col" class="hidden sm:table-cell">Updated</th></tr></thead>
+        <tbody>
+          {% for rule in rules %}
+          <tr>
+            <td class="num text-faint">{{ rule.position|add:1 }}</td>
+            <td><a class="font-mono break-all{% if rule.removed_at %} text-muted line-through{% endif %}" href="{{ rule.get_absolute_url }}">{{ rule.name }}</a>{% if rule.is_private %} <span class="badge badge-neutral">private</span>{% endif %}{% if rule.is_global %} <span class="badge badge-neutral">global</span>{% endif %}{% if rule.description %}<div class="max-w-xl truncate text-xs text-muted" title="{{ rule.description }}">{{ rule.description }}</div>{% endif %}</td>
+            <td class="hidden md:table-cell"><span class="flex flex-wrap gap-1">{% for tag in rule.tags.all %}<a class="tag" href="{% url 'rules:rule_list' %}?tag={{ tag.name|urlencode }}">{{ tag.name }}</a>{% endfor %}</span></td>
+            <td>{% rule_status rule compact=True %}</td>
+            <td class="hidden sm:table-cell">{{ rule.updated_at|ts:"short" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>This ruleset has no rules.</p>{% if perms.rules.add_rule %}<a class="btn" href="{% url 'rules:rule_create' %}?ruleset={{ ruleset.pk }}">Add a rule</a>{% endif %}</div>
+    {% endif %}
+  </section>
+
+  <aside class="card card-body self-start" aria-labelledby="details-heading">
+    <h2 id="details-heading" class="mb-3 text-base">Details</h2>
+    <dl class="meta-list">
+      <dt>Origin</dt><dd>{{ ruleset.get_origin_display }}</dd>
+      <dt>Path</dt><dd class="font-mono text-xs break-all">{{ ruleset.path }}</dd>
+      <dt>Created</dt><dd>{{ ruleset.created_at|ts }}</dd>
+      <dt>Last imported</dt><dd>{{ ruleset.last_imported_at|ts }}</dd>
+      <dt>Last changed</dt><dd>{{ ruleset.updated_at|ts }}</dd>
+      {% if ruleset.sha256 %}<dt>File SHA-256</dt><dd>{% include "rules/includes/hash.html" with value=ruleset.sha256 id="ruleset-sha256" label="SHA-256" %}</dd>{% endif %}
+    </dl>
+  </aside>
+</div>
+{% endblock %}

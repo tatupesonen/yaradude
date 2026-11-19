@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% load yaradude %}
+{% block title %}{% if creating %}New rule{% else %}Edit {{ rule.name }}{% endif %}{% endblock %}
+{% block content %}
+<nav aria-label="Breadcrumb" class="mb-2 text-sm text-muted">
+  <a href="{% url 'rules:rule_list' %}">Rules</a>{% if rule %} <span aria-hidden="true">/</span> <a href="{{ rule.ruleset.get_absolute_url }}">{{ rule.ruleset.name }}</a> <span aria-hidden="true">/</span> <a class="font-mono" href="{{ rule.get_absolute_url }}">{{ rule.name }}</a>{% endif %}
+</nav>
+<div class="mb-5">
+  <h1>{% if creating %}New rule{% else %}Edit <span class="font-mono">{{ rule.name }}</span>{% endif %}</h1>
+  <p class="mt-0.5 text-sm text-muted">{% if creating %}Write one rule, with the <code>import</code> lines it needs.{% else %}Saving creates version {{ rule.version|add:1 }}; the current version stays in the history.{% endif %} “Validate” compiles the rule together with the other rules of its ruleset without saving.</p>
+</div>
+
+{% if rule.removed_at %}
+<div class="alert alert-warning mb-4" role="status"><span>This rule is marked as removed from its source file. Saving changes its content but does not bring it back into exports and scans.</span></div>
+{% endif %}
+
+<form method="post" class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]" novalidate>
+  {% csrf_token %}
+  <div class="flex min-w-0 flex-col gap-4">
+    {% if form.non_field_errors %}<div class="alert alert-error" role="alert">{% for error in form.non_field_errors %}<span>{{ error }}</span>{% endfor %}</div>{% endif %}
+
+    {% if creating %}
+    <div class="card card-body grid gap-4 sm:grid-cols-2">
+      <div>
+        <label class="label" for="{{ form.ruleset.id_for_label }}">{{ form.ruleset.label }}</label>
+        <select class="select" name="{{ form.ruleset.html_name }}" id="{{ form.ruleset.id_for_label }}">
+          {% for value, label in form.ruleset.field.choices %}<option value="{{ value }}"{% if form.ruleset.value|stringformat:"s" == value|stringformat:"s" %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+        {% if form.ruleset.errors %}<p class="field-error">{{ form.ruleset.errors|join:" " }}</p>{% endif %}
+      </div>
+      <div>
+        <label class="label" for="{{ form.new_ruleset.id_for_label }}">{{ form.new_ruleset.label }}</label>
+        <input class="input" type="text" name="{{ form.new_ruleset.html_name }}" id="{{ form.new_ruleset.id_for_label }}" value="{{ form.new_ruleset.value|default:'' }}" maxlength="100" aria-describedby="{{ form.new_ruleset.id_for_label }}-help"{% if form.new_ruleset.errors %} aria-invalid="true"{% endif %}>
+        <p class="help" id="{{ form.new_ruleset.id_for_label }}-help">{{ form.new_ruleset.help_text }}</p>
+        {% if form.new_ruleset.errors %}<p class="field-error">{{ form.new_ruleset.errors|join:" " }}</p>{% endif %}
+      </div>
+    </div>
+    {% else %}
+    {{ form.version }}
+    {% endif %}
+
+    <div>
+      <div class="mb-1 flex items-end justify-between gap-2">
+        <label class="label mb-0" for="{{ form.text.id_for_label }}">{{ form.text.label }}</label>
+        <span class="hidden text-xs text-faint sm:inline">Tab indents · Esc then Tab leaves the editor</span>
+      </div>
+      <textarea class="editor" name="{{ form.text.html_name }}" id="{{ form.text.id_for_label }}" rows="24" spellcheck="false" autocapitalize="off" autocomplete="off" data-editor aria-describedby="{{ form.text.id_for_label }}-help{% if result and not result.ok %} editor-error{% endif %}"{% if form.text.errors or result and not result.ok %} aria-invalid="true"{% endif %}>{{ form.text.value|default:'' }}</textarea>
+      <p class="help" id="{{ form.text.id_for_label }}-help">{{ form.text.help_text }}</p>
+      {% if form.text.errors %}<p class="field-error">{{ form.text.errors|join:" " }}</p>{% endif %}
+    </div>
+
+    <div class="flex flex-wrap gap-2">
+      <button type="submit" name="action" value="save" class="btn btn-primary">Save</button>
+      <button type="submit" name="action" value="validate" class="btn">Validate</button>
+      <a class="btn btn-ghost" href="{% if rule %}{{ rule.get_absolute_url }}{% else %}{% url 'rules:rule_list' %}{% endif %}">Cancel</a>
+    </div>
+  </div>
+
+  <aside class="flex flex-col gap-4" aria-live="polite">
+    {% if result %}
+      {% if not result.ok %}
+      <section class="card card-body" id="editor-error">
+        <h2 class="mb-2 text-base text-error">{% if validated %}Does not compile{% else %}Not saved{% endif %}</h2>
+        {% if result.line %}<p class="mb-2 text-sm">At <a href="#{{ form.text.id_for_label }}" data-goto-line="{{ result.line }}">line {{ result.line }}</a> of the editor text.</p>{% endif %}
+        <pre class="diagnostic">{{ result.error }}</pre>
+      </section>
+      {% else %}
+      <section class="alert alert-success" role="status"><span>Compiles{% if result.parsed %}: rule <span class="font-mono">{{ result.parsed.name }}</span>{% if result.parsed.tags %} with tags {{ result.parsed.tags|join:", " }}{% endif %}{% endif %}. {% if validated %}Not saved yet.{% endif %}</span></section>
+      {% endif %}
+      {% if result.warnings %}
+      <section class="card card-body">
+        <h2 class="mb-2 text-base text-warn">{{ result.warnings|length }} warning{{ result.warnings|pluralize }}</h2>
+        <div class="flex flex-col gap-2">{% for warning in result.warnings %}<pre class="diagnostic diagnostic-warn">{{ warning }}</pre>{% endfor %}</div>
+      </section>
+      {% endif %}
+      {% if result.broken %}
+      <section class="card card-body">
+        <h2 class="mb-2 text-base text-warn">Would break {{ result.broken|length }} other rule{{ result.broken|pluralize }}</h2>
+        <p class="mb-2 text-sm text-muted">Saving is still allowed; these rules would stop compiling.</p>
+        <ul class="flex flex-col gap-2">{% for broken in result.broken %}<li><a class="font-mono" href="{{ broken.rule.get_absolute_url }}">{{ broken.rule.name }}</a><pre class="diagnostic mt-1">{{ broken.error }}</pre></li>{% endfor %}</ul>
+      </section>
+      {% endif %}
+    {% else %}
+    <section class="card card-body text-sm text-muted">
+      <h2 class="mb-2 text-base text-fg">How saving works</h2>
+      <ul class="flex list-disc flex-col gap-1.5 pl-4">
+        <li>The text must hold exactly one rule, optionally preceded by <code>import</code> lines.</li>
+        <li>A save is refused when this rule does not compile or its name is taken in the ruleset.</li>
+        <li>If the change breaks other rules of the ruleset, it is saved and they are listed.</li>
+        {% if rule and rule.imported_sha256 %}<li>An edit stays until the rule changes in its source file; then the file wins and this edit remains in the history.</li>{% endif %}
+      </ul>
+    </section>
+    {% endif %}
+  </aside>
+</form>
+{% endblock %}

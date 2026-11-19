@@ -1,0 +1,507 @@
+/*
+ * yaradude stylesheet: Tailwind CSS v4 input.
+ *
+ * Built with the standalone Tailwind CLI through django-tailwind-cli:
+ *   uv run python manage.py tailwind build   -> rules/static/rules/css/yaradude.css
+ *   uv run python manage.py tailwind watch
+ * See PLAN.md section 7. The output is committed; rebuild after changing
+ * templates, JS or this file.
+ *
+ * Constraints: no remote resources (no @import url(), no web fonts), no
+ * inline styles in templates. Colours are design tokens that switch with
+ * prefers-color-scheme, so templates never need dark: variants.
+ */
+
+@import "tailwindcss" source(none);
+
+@source "../templates";
+@source "../../accounts/templates";
+@source "../static/rules/js";
+@source "../templatetags";
+@source "../forms.py";
+@source "../views";
+
+/* ---------------------------------------------------------------- tokens */
+
+:root {
+  color-scheme: light;
+  --yd-bg: #f5f6f8;
+  --yd-surface: #ffffff;
+  --yd-subtle: #f0f2f5;
+  --yd-line: #dde1e7;
+  --yd-line-strong: #c3cad4;
+  --yd-fg: #1b2330;
+  --yd-muted: #556070;
+  --yd-faint: #6b7584;
+  --yd-accent: #0b6f73;
+  --yd-accent-strong: #08585b;
+  --yd-accent-soft: #e2f1f1;
+  --yd-on-accent: #ffffff;
+  --yd-ok: #1a7536;
+  --yd-ok-soft: #e5f3e9;
+  --yd-error: #b42318;
+  --yd-error-soft: #fdecea;
+  --yd-warn: #8a5a00;
+  --yd-warn-soft: #fdf3d7;
+  --yd-modified: #5b34b0;
+  --yd-modified-soft: #efe9fa;
+  --yd-removed: #5f6875;
+  --yd-removed-soft: #eceef1;
+  --yd-focus: #0b6f73;
+  --yd-code-bg: #f7f8fa;
+  /* syntax */
+  --yd-syn-keyword: #8a2f9e;
+  --yd-syn-string: #1a6a3a;
+  --yd-syn-comment: #6b7584;
+  --yd-syn-variable: #0b5fa5;
+  --yd-syn-number: #a14a00;
+  --yd-syn-builtin: #0b6f73;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --yd-bg: #0e1217;
+    --yd-surface: #151a21;
+    --yd-subtle: #1b2129;
+    --yd-line: #29303a;
+    --yd-line-strong: #3a434f;
+    --yd-fg: #e3e7ed;
+    --yd-muted: #a0aab7;
+    --yd-faint: #8a94a2;
+    --yd-accent: #46bdb5;
+    --yd-accent-strong: #6dd0c8;
+    --yd-accent-soft: #11302f;
+    --yd-on-accent: #04211f;
+    --yd-ok: #56c776;
+    --yd-ok-soft: #10301b;
+    --yd-error: #f47a70;
+    --yd-error-soft: #3b1714;
+    --yd-warn: #e2b54a;
+    --yd-warn-soft: #33280b;
+    --yd-modified: #b89af2;
+    --yd-modified-soft: #281f3d;
+    --yd-removed: #98a1ad;
+    --yd-removed-soft: #222830;
+    --yd-focus: #6dd0c8;
+    --yd-code-bg: #11161c;
+    --yd-syn-keyword: #d49bf0;
+    --yd-syn-string: #8fd6a0;
+    --yd-syn-comment: #8a94a2;
+    --yd-syn-variable: #7cb8f2;
+    --yd-syn-number: #f0a868;
+    --yd-syn-builtin: #6dd0c8;
+  }
+}
+
+@theme inline {
+  --font-sans:
+    system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans",
+    "Liberation Sans", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", "DejaVu Sans Mono", monospace;
+
+  /* type scale: 12 / 13 / 14 / 16 / 20 / 24 px */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+
+  --color-bg: var(--yd-bg);
+  --color-surface: var(--yd-surface);
+  --color-subtle: var(--yd-subtle);
+  --color-line: var(--yd-line);
+  --color-line-strong: var(--yd-line-strong);
+  --color-fg: var(--yd-fg);
+  --color-muted: var(--yd-muted);
+  --color-faint: var(--yd-faint);
+  --color-accent: var(--yd-accent);
+  --color-accent-strong: var(--yd-accent-strong);
+  --color-accent-soft: var(--yd-accent-soft);
+  --color-on-accent: var(--yd-on-accent);
+  --color-ok: var(--yd-ok);
+  --color-ok-soft: var(--yd-ok-soft);
+  --color-error: var(--yd-error);
+  --color-error-soft: var(--yd-error-soft);
+  --color-warn: var(--yd-warn);
+  --color-warn-soft: var(--yd-warn-soft);
+  --color-modified: var(--yd-modified);
+  --color-modified-soft: var(--yd-modified-soft);
+  --color-removed: var(--yd-removed);
+  --color-removed-soft: var(--yd-removed-soft);
+  --color-code: var(--yd-code-bg);
+}
+
+/* ------------------------------------------------------------------ base */
+
+@layer base {
+  html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-bg text-fg font-sans text-base antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--yd-focus);
+    outline-offset: 2px;
+  }
+  a {
+    @apply text-accent underline-offset-2 hover:underline;
+  }
+  h1 {
+    @apply text-xl font-semibold tracking-tight;
+  }
+  h2 {
+    @apply text-lg font-semibold;
+  }
+  h3 {
+    @apply text-base font-semibold;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    @apply font-mono;
+  }
+  ::selection {
+    background: var(--yd-accent-soft);
+  }
+  [hidden] {
+    display: none !important;
+  }
+}
+
+/* ------------------------------------------------------------ components */
+
+@layer components {
+  /* layout */
+  .page {
+    @apply mx-auto w-full max-w-[90rem] px-4 sm:px-6;
+  }
+  .card {
+    @apply rounded-lg border border-line bg-surface;
+  }
+  .card-header {
+    @apply flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3;
+  }
+  .card-body {
+    @apply px-4 py-4;
+  }
+  .eyebrow {
+    @apply text-xs font-medium tracking-wide text-muted uppercase;
+  }
+
+  /* navigation */
+  .nav-link {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium whitespace-nowrap text-muted no-underline hover:bg-subtle hover:text-fg hover:no-underline;
+  }
+  .nav-link[aria-current="page"] {
+    @apply bg-accent-soft text-accent-strong;
+  }
+
+  /* buttons */
+  .btn {
+    @apply inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-line-strong bg-surface px-3 py-1.5 text-sm font-medium whitespace-nowrap text-fg no-underline shadow-xs transition-colors hover:bg-subtle hover:no-underline disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-accent bg-accent text-on-accent hover:border-accent-strong hover:bg-accent-strong;
+  }
+  .btn-danger {
+    @apply border-error bg-error text-white hover:opacity-90;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent shadow-none hover:bg-subtle;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-xs;
+  }
+
+  /* forms */
+  .label {
+    @apply mb-1 block text-sm font-medium text-fg;
+  }
+  .help {
+    @apply mt-1 text-xs text-muted;
+  }
+  .field-error {
+    @apply mt-1 text-xs font-medium text-error;
+  }
+  .input,
+  .select,
+  .textarea {
+    @apply block w-full rounded-md border border-line-strong bg-surface px-2.5 py-1.5 text-base text-fg placeholder:text-faint focus-visible:border-accent;
+  }
+  .input[aria-invalid="true"],
+  .textarea[aria-invalid="true"] {
+    @apply border-error;
+  }
+  .select {
+    @apply pr-8;
+  }
+  .checkbox {
+    @apply size-4 cursor-pointer rounded-sm border-line-strong accent-[var(--yd-accent)];
+  }
+  .editor {
+    @apply min-h-[28rem] w-full resize-y rounded-md border border-line-strong bg-code px-3 py-2.5 font-mono text-[0.8125rem] leading-5 text-fg focus-visible:border-accent;
+    tab-size: 4;
+  }
+
+  /* badges */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full border px-2 py-px text-xs font-medium whitespace-nowrap;
+  }
+  .badge::before {
+    content: "";
+    @apply size-1.5 rounded-full bg-current;
+  }
+  .badge-ok {
+    @apply border-ok/25 bg-ok-soft text-ok;
+  }
+  .badge-error {
+    @apply border-error/25 bg-error-soft text-error;
+  }
+  .badge-warn {
+    @apply border-warn/25 bg-warn-soft text-warn;
+  }
+  .badge-modified {
+    @apply border-modified/25 bg-modified-soft text-modified;
+  }
+  .badge-removed {
+    @apply border-removed/25 bg-removed-soft text-removed;
+  }
+  .badge-neutral {
+    @apply border-line bg-subtle text-muted;
+  }
+  .badge-neutral::before {
+    display: none;
+  }
+  .tag {
+    @apply inline-flex items-center rounded-sm bg-subtle px-1.5 py-px font-mono text-xs text-muted no-underline hover:bg-accent-soft hover:text-accent-strong hover:no-underline;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-line bg-surface py-0.5 pr-1 pl-2.5 text-xs text-muted;
+  }
+  .chip > a {
+    @apply inline-flex size-5 items-center justify-center rounded-full text-faint no-underline hover:bg-error-soft hover:text-error hover:no-underline;
+  }
+
+  /* alerts and messages */
+  .alert {
+    @apply flex gap-3 rounded-md border px-3 py-2.5 text-sm;
+  }
+  .alert-info {
+    @apply border-accent/30 bg-accent-soft text-fg;
+  }
+  .alert-success {
+    @apply border-ok/30 bg-ok-soft text-fg;
+  }
+  .alert-warning {
+    @apply border-warn/30 bg-warn-soft text-fg;
+  }
+  .alert-error {
+    @apply border-error/30 bg-error-soft text-fg;
+  }
+
+  /* data tables */
+  .table-wrap {
+    @apply overflow-x-auto;
+  }
+  .data-table {
+    @apply w-full border-collapse text-sm;
+  }
+  .data-table th {
+    @apply sticky top-0 border-b border-line bg-subtle px-3 py-2 text-left text-xs font-semibold whitespace-nowrap text-muted;
+  }
+  .data-table td {
+    @apply border-b border-line px-3 py-1.5 align-top;
+  }
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .data-table tbody tr:hover td {
+    @apply bg-subtle/60;
+  }
+  .data-table .num {
+    @apply text-right tabular-nums;
+  }
+  .sort-link {
+    @apply inline-flex items-center gap-1 text-muted no-underline hover:text-fg hover:no-underline;
+  }
+  .sort-link[aria-sort] {
+    @apply text-fg;
+  }
+
+  /* key/value lists */
+  .meta-list {
+    @apply grid grid-cols-[minmax(7rem,max-content)_1fr] gap-x-4 gap-y-1.5 text-sm;
+  }
+  .meta-list dt {
+    @apply text-muted;
+  }
+  .meta-list dd {
+    @apply min-w-0 break-words;
+  }
+
+  /* stat tiles */
+  .stat {
+    @apply flex flex-col gap-1 rounded-lg border border-line bg-surface px-4 py-3 text-fg no-underline hover:border-line-strong hover:no-underline;
+  }
+  .stat-value {
+    @apply text-2xl font-semibold tabular-nums;
+  }
+
+  /* pagination */
+  .pager {
+    @apply flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-2.5 text-sm text-muted;
+  }
+
+  /* code, diagnostics, diffs */
+  .code-block {
+    @apply overflow-x-auto rounded-md border border-line bg-code text-[0.8125rem] leading-5;
+  }
+  .code-block pre {
+    @apply m-0 p-3;
+  }
+  .diagnostic {
+    @apply overflow-x-auto rounded-md border border-error/30 bg-error-soft px-3 py-2 font-mono text-xs leading-5 whitespace-pre text-fg;
+  }
+  .diagnostic-warn {
+    @apply border-warn/30 bg-warn-soft;
+  }
+  .diff {
+    @apply w-full border-collapse font-mono text-[0.8125rem] leading-5;
+  }
+  .diff td {
+    @apply px-2 align-top whitespace-pre;
+  }
+  .diff .ln {
+    @apply w-0 border-r border-line px-2 text-right text-faint select-none;
+  }
+  .diff .hunk td {
+    @apply bg-subtle py-0.5 text-muted;
+  }
+  .diff .added td {
+    @apply bg-ok-soft;
+  }
+  .diff .removed td {
+    @apply bg-error-soft;
+  }
+  .diff .mark {
+    @apply w-0 pr-0 select-none;
+  }
+
+  /* drop zone */
+  .dropzone {
+    @apply flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-line-strong bg-subtle/50 px-4 py-8 text-center text-sm text-muted transition-colors;
+  }
+  .dropzone.is-dragover {
+    @apply border-accent bg-accent-soft text-fg;
+  }
+
+  .empty {
+    @apply flex flex-col items-center gap-2 px-4 py-12 text-center text-sm text-muted;
+  }
+
+  /* <details> used as disclosure: no default marker */
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+  .menu[open] > summary {
+    @apply bg-subtle text-fg;
+  }
+}
+
+/*
+ * The rules-list filters sit in a <details> disclosure on phones; from the
+ * sm breakpoint up they are always shown and the summary is hidden. Only in
+ * browsers that support ::details-content, so older ones keep a working
+ * disclosure instead of hiding the filters.
+ */
+@supports selector(::details-content) {
+  @media (width >= 40rem) {
+    details.filters > summary {
+      display: none;
+    }
+    details.filters::details-content {
+      content-visibility: visible;
+      display: contents;
+    }
+  }
+}
+
+/* -------------------------------------------------- Pygments (YaraLexer) */
+
+.highlight pre {
+  @apply m-0 overflow-x-auto p-3 font-mono text-[0.8125rem] leading-5;
+}
+.highlight .linenos {
+  @apply mr-3 inline-block w-8 pr-2 text-right text-faint select-none;
+}
+.highlight .k,
+.highlight .kd,
+.highlight .kc,
+.highlight .kn,
+.highlight .kr,
+.highlight .ow {
+  color: var(--yd-syn-keyword);
+  font-weight: 600;
+}
+.highlight .kt,
+.highlight .nb,
+.highlight .bp {
+  color: var(--yd-syn-builtin);
+}
+.highlight .s,
+.highlight .s1,
+.highlight .s2,
+.highlight .sr,
+.highlight .se,
+.highlight .sx {
+  color: var(--yd-syn-string);
+}
+.highlight .c,
+.highlight .c1,
+.highlight .cm,
+.highlight .cp,
+.highlight .cs {
+  color: var(--yd-syn-comment);
+  font-style: italic;
+}
+.highlight .nv,
+.highlight .vi,
+.highlight .vg {
+  color: var(--yd-syn-variable);
+}
+.highlight .m,
+.highlight .mi,
+.highlight .mh,
+.highlight .mf,
+.highlight .mo {
+  color: var(--yd-syn-number);
+}
+.highlight .nf,
+.highlight .nc {
+  font-weight: 600;
+}
+.highlight .err {
+  color: var(--yd-error);
+}
+.highlight .hll {
+  background: var(--yd-warn-soft);
+  display: block;
+}

@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% load static yaradude %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="mb-6 flex flex-wrap items-end justify-between gap-3">
+  <div>
+    <h1>Dashboard</h1>
+    <p class="mt-0.5 text-sm text-muted">The state of the rule collection at a glance.</p>
+  </div>
+  <div class="flex flex-wrap gap-2">
+    {% if perms.rules.import_rules %}<a class="btn" href="{% url 'rules:import' %}">Import rules</a>{% endif %}
+    {% if perms.rules.add_rule %}<a class="btn" href="{% url 'rules:rule_create' %}">New rule</a>{% endif %}
+    {% if perms.rules.scan_rules %}<a class="btn btn-primary" href="{% url 'rules:scan' %}">Test scan</a>{% endif %}
+  </div>
+</div>
+
+{% if not counts.rules and not counts.removed %}
+<div class="card">
+  <div class="empty py-16">
+    <img src="{% static 'rules/img/mark.svg' %}" alt="" width="40" height="40" class="size-10 opacity-80">
+    <h2 class="text-fg">No rules yet</h2>
+    {% if perms.rules.import_rules %}
+    <p class="max-w-md">Import the server's rules directory or upload <code>.yar</code> files to get started. Each file becomes a ruleset; each rule in it is tracked with its own history.</p>
+    <a class="btn btn-primary mt-2" href="{% url 'rules:import' %}">Go to Import</a>
+    {% else %}
+    <p class="max-w-md">Nothing has been imported yet. Ask an editor to import the rules directory.</p>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<section aria-labelledby="stats-heading">
+  <h2 id="stats-heading" class="sr-only">Counts</h2>
+  <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+    <a class="stat" href="{% url 'rules:rule_list' %}">
+      <span class="eyebrow">Rules</span>
+      <span class="stat-value">{{ counts.rules }}</span>
+      <span class="text-xs text-muted">active</span>
+    </a>
+    <a class="stat" href="{% url 'rules:ruleset_list' %}">
+      <span class="eyebrow">Rulesets</span>
+      <span class="stat-value">{{ ruleset_count }}</span>
+      <span class="text-xs text-muted">files and collections</span>
+    </a>
+    <div class="stat hover:border-line">
+      <span class="eyebrow">Tags</span>
+      <span class="stat-value">{{ tag_count }}</span>
+      <span class="text-xs text-muted">distinct</span>
+    </div>
+    <a class="stat" href="{% url 'rules:rule_list' %}?status=error">
+      <span class="eyebrow">Compile errors</span>
+      <span class="stat-value{% if counts.failing %} text-error{% endif %}">{{ counts.failing }}</span>
+      <span class="text-xs text-muted">rules that do not compile</span>
+    </a>
+    <a class="stat" href="{% url 'rules:rule_list' %}?status=warnings">
+      <span class="eyebrow">Warnings</span>
+      <span class="stat-value{% if counts.warnings %} text-warn{% endif %}">{{ counts.warnings }}</span>
+      <span class="text-xs text-muted">compile with warnings</span>
+    </a>
+    <a class="stat" href="{% url 'rules:rule_list' %}?status=modified">
+      <span class="eyebrow">Modified locally</span>
+      <span class="stat-value{% if counts.modified %} text-modified{% endif %}">{{ counts.modified }}</span>
+      <span class="text-xs text-muted">edited since import</span>
+    </a>
+    <a class="stat" href="{% url 'rules:rule_list' %}?status=removed">
+      <span class="eyebrow">Removed</span>
+      <span class="stat-value{% if counts.removed %} text-removed{% endif %}">{{ counts.removed }}</span>
+      <span class="text-xs text-muted">dropped from their file</span>
+    </a>
+  </div>
+</section>
+
+<div class="mt-6 grid gap-6 lg:grid-cols-5">
+  <section class="card lg:col-span-3" aria-labelledby="recent-rules">
+    <div class="card-header">
+      <h2 id="recent-rules">Recently updated rules</h2>
+      <a class="text-sm" href="{% url 'rules:rule_list' %}?sort=-updated">All by update time</a>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th scope="col">Rule</th><th scope="col">Ruleset</th><th scope="col">Status</th><th scope="col">Updated</th></tr></thead>
+        <tbody>
+          {% for rule in recent_rules %}
+          <tr>
+            <td><a class="font-mono" href="{{ rule.get_absolute_url }}">{{ rule.name }}</a></td>
+            <td class="max-w-56 truncate text-muted" title="{{ rule.ruleset.path }}">{{ rule.ruleset.name|basename }}</td>
+            <td>{% rule_status rule compact=True %}</td>
+            <td>{{ rule.updated_at|ts:"short" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card lg:col-span-2" aria-labelledby="recent-runs">
+    <div class="card-header">
+      <h2 id="recent-runs">Recent imports</h2>
+      <a class="text-sm" href="{% url 'rules:import' %}">Import history</a>
+    </div>
+    {% if recent_runs %}
+    <ul class="divide-y divide-line">
+      {% for run in recent_runs %}
+      <li class="px-4 py-2.5">
+        <div class="flex items-baseline justify-between gap-3">
+          <a href="{{ run.get_absolute_url }}" class="font-medium">{{ run.get_origin_display }}</a>
+          <span class="text-xs">{{ run.started_at|ts:"short" }}</span>
+        </div>
+        <div class="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted">
+          <span>{{ run.files_seen }} file{{ run.files_seen|pluralize }}</span>
+          {% if run.rules_created %}<span class="text-ok">+{{ run.rules_created }} new</span>{% endif %}
+          {% if run.rules_updated %}<span>{{ run.rules_updated }} updated</span>{% endif %}
+          {% if run.rules_removed %}<span class="text-removed">{{ run.rules_removed }} removed</span>{% endif %}
+          {% if run.files_failed %}<span class="font-medium text-error">{{ run.files_failed }} failed</span>{% endif %}
+          {% if run.user %}<span>by {{ run.user.get_username }}</span>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No imports yet.</p>
+    {% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

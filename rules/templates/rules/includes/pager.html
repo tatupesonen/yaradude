@@ -1,0 +1,18 @@
+{% load yaradude %}{% if page.paginator.count %}
+<nav class="pager" aria-label="Pagination">
+  <span class="tabular-nums">{{ page.start_index }}–{{ page.end_index }} of {{ page.paginator.count }}</span>
+  {% if page.has_other_pages %}
+  <div class="flex flex-wrap items-center gap-1">
+    {% if page.has_previous %}<a class="btn btn-sm" href="{% query page=1 %}" aria-label="First page">«</a><a class="btn btn-sm" href="{% query page=page.previous_page_number %}" rel="prev">Previous</a>{% else %}<span class="btn btn-sm opacity-50" aria-hidden="true">«</span><span class="btn btn-sm opacity-50" aria-hidden="true">Previous</span>{% endif %}
+    <form method="get" class="flex items-center gap-1 px-1">
+      {% for key, value in request.GET.items %}{% if key != "page" %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endif %}{% endfor %}
+      <label for="pager-{{ pager_id|default:'page' }}" class="whitespace-nowrap">Page</label>
+      <input class="input w-16 px-1.5 py-0.5 text-center text-sm tabular-nums" type="number" inputmode="numeric" min="1" max="{{ page.paginator.num_pages }}" name="page" id="pager-{{ pager_id|default:'page' }}" value="{{ page.number }}">
+      <span class="whitespace-nowrap">of {{ page.paginator.num_pages }}</span>
+      <button type="submit" class="btn btn-sm btn-ghost">Go</button>
+    </form>
+    {% if page.has_next %}<a class="btn btn-sm" href="{% query page=page.next_page_number %}" rel="next">Next</a><a class="btn btn-sm" href="{% query page=page.paginator.num_pages %}" aria-label="Last page">»</a>{% else %}<span class="btn btn-sm opacity-50" aria-hidden="true">Next</span><span class="btn btn-sm opacity-50" aria-hidden="true">»</span>{% endif %}
+  </div>
+  {% endif %}
+</nav>
+{% endif %}

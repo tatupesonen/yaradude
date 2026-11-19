@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% load yaradude %}
+{% block title %}Test scan{% endblock %}
+{% block content %}
+<div class="mb-5">
+  <h1>Test scan</h1>
+  <p class="mt-0.5 text-sm text-muted">Match a sample file against the stored rules. The sample is scanned in memory and never stored or logged; rules that do not compile are left out and listed.</p>
+</div>
+
+<div class="grid gap-5 xl:grid-cols-[24rem_minmax(0,1fr)]">
+  <form method="post" enctype="multipart/form-data" class="card card-body flex flex-col gap-4 self-start" data-busy>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="alert alert-error" role="alert">{% for error in form.non_field_errors %}<span>{{ error }}</span>{% endfor %}</div>{% endif %}
+    <div>
+      <label class="label" for="{{ form.sample.id_for_label }}">{{ form.sample.label }}</label>
+      <input type="file" class="block w-full text-sm text-muted file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-line-strong file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-fg hover:file:bg-subtle" name="{{ form.sample.html_name }}" id="{{ form.sample.id_for_label }}" required aria-describedby="{{ form.sample.id_for_label }}-help"{% if form.sample.errors %} aria-invalid="true"{% endif %}>
+      <p class="help" id="{{ form.sample.id_for_label }}-help">{{ form.sample.help_text }}</p>
+      {% if form.sample.errors %}<p class="field-error" role="alert">{{ form.sample.errors|join:" " }}</p>{% endif %}
+    </div>
+    <div>
+      <label class="label" for="{{ form.path.id_for_label }}">{{ form.path.label }}</label>
+      <input class="input" type="text" name="{{ form.path.html_name }}" id="{{ form.path.id_for_label }}" value="{{ form.path.value|default:'' }}" placeholder="e.g. signature-base/" spellcheck="false" autocapitalize="off" aria-describedby="{{ form.path.id_for_label }}-help scan-limit">
+      <p class="help" id="{{ form.path.id_for_label }}-help">{{ form.path.help_text }}</p>
+      {% if form.path.errors %}<p class="field-error">{{ form.path.errors|join:" " }}</p>{% endif %}
+      <p class="mt-2 flex flex-wrap items-center gap-2 text-xs" id="scan-limit">
+        <span class="{% if limit.rules %}text-muted{% else %}text-warn{% endif %}">{% if form.path.value %}This limit covers{% else %}Scanning with all{% endif %} {{ limit.rules }} active rule{{ limit.rules|pluralize }} in {{ limit.rulesets }} ruleset{{ limit.rulesets|pluralize }}.</span>
+        <button type="submit" formmethod="get" formnovalidate class="btn btn-sm btn-ghost">Check limit</button>
+      </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-3">
+      <button type="submit" class="btn btn-primary" data-busy-label="Scanning…">Scan sample</button>
+      <span class="busy-note hidden text-xs text-muted" role="status">Compiling the rules and scanning; with many rules this can take a while.</span>
+    </div>
+  </form>
+
+  <div class="flex min-w-0 flex-col gap-5" aria-live="polite">
+    {% if result %}
+    <section class="card card-body" aria-labelledby="sample-heading">
+      <h2 id="sample-heading" class="sr-only">Sample</h2>
+      <dl class="meta-list">
+        <dt>Sample</dt><dd class="font-mono text-xs break-all">{{ result.sample_name|default:"(unnamed)" }}</dd>
+        <dt>Size</dt><dd>{{ result.sample_size|filesizeformat }} <span class="text-faint">({{ result.sample_size }} bytes)</span></dd>
+        <dt>SHA-256</dt><dd>{% include "rules/includes/hash.html" with value=result.sample_sha256 id="sample-sha256" label="SHA-256" %}</dd>
+        <dt>Scanned with</dt><dd>{{ result.rules_scanned }} rule{{ result.rules_scanned|pluralize }} from {{ result.rulesets|length }} ruleset{{ result.rulesets|length|pluralize }} in {{ result.elapsed|floatformat:2 }} s</dd>
+      </dl>
+    </section>
+
+    <section class="card" aria-labelledby="matches-heading">
+      <div class="card-header">
+        <h2 id="matches-heading">{{ result.matches|length }} matching rule{{ result.matches|length|pluralize }}</h2>
+      </div>
+      {% if result.matches %}
+      <ul class="divide-y divide-line">
+        {% for match in result.matches %}
+        <li class="px-4 py-3">
+          <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <a class="font-mono font-semibold" href="{{ match.rule.get_absolute_url }}">{{ match.rule.name }}</a>
+            <a class="text-sm text-muted" href="{{ match.ruleset.get_absolute_url }}">{{ match.ruleset.name }}</a>
+            <span class="flex flex-wrap gap-1">{% for tag in match.tags %}<span class="tag">{{ tag }}</span>{% endfor %}</span>
+          </div>
+          {% if match.patterns %}
+          <div class="table-wrap mt-2">
+            <table class="data-table">
+              <thead><tr><th scope="col">String</th><th scope="col" class="num">Offset</th><th scope="col" class="num">Length</th><th scope="col">Bytes (hex)</th><th scope="col">ASCII</th></tr></thead>
+              <tbody>
+                {% for pattern in match.patterns %}
+                {% for instance in pattern.instances %}
+                <tr>
+                  {% if forloop.first %}<th scope="row" rowspan="{{ pattern.instances|length }}" class="border-b border-line px-3 py-1.5 text-left align-top font-mono text-xs font-medium">{{ pattern.identifier }}{% if pattern.count > pattern.instances|length %}<div class="font-sans font-normal text-faint">{{ pattern.count }}{% if pattern.count >= 1000 %}+{% endif %} matches, first {{ pattern.instances|length }} shown</div>{% endif %}</th>{% endif %}
+                  <td class="num font-mono text-xs">0x{{ instance.offset|stringformat:"x" }}</td>
+                  <td class="num font-mono text-xs">{{ instance.length }}</td>
+                  <td class="font-mono text-xs whitespace-nowrap">{{ instance.hex }}{% if instance.truncated %} <span class="text-faint">…</span>{% endif %}</td>
+                  <td class="font-mono text-xs whitespace-pre">{{ instance.ascii }}</td>
+                </tr>
+                {% endfor %}
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}<p class="mt-1 text-xs text-muted">Matched on its condition alone (no string matches).</p>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No rule matched this sample.</p>
+      {% endif %}
+    </section>
+
+    {% if result.left_out %}
+    <section class="card" aria-labelledby="left-out-heading">
+      <div class="card-header"><h2 id="left-out-heading" class="text-warn">{{ result.left_out|length }} rule{{ result.left_out|length|pluralize }} left out</h2><span class="text-xs text-muted">They do not compile.</span></div>
+      <ul class="flex flex-wrap gap-x-4 gap-y-1 px-4 py-3 text-sm">
+        {% for rule in result.left_out %}<li><a class="font-mono" href="{{ rule.get_absolute_url }}">{{ rule.name }}</a> <span class="text-xs text-faint">{{ rule.ruleset.name }}</span></li>{% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+    {% else %}
+    <div class="card"><div class="empty py-16"><h2 class="text-fg">No scan yet</h2><p>Choose a sample on the left. Results show each matching rule with the strings that matched, their offsets and a preview of the bytes.</p></div></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

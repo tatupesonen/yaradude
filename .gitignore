@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+
+# Tool caches
+.ruff_cache/
+.ty_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases (SQLite and its WAL side files)
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+.preview/
+
+# Django
+staticfiles/
+media/
+
+# Tailwind standalone CLI binary (fetched per machine, never committed)
+.tailwind/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Offline bundles and image archives
+dist/
+*.tar
+*.tar.gz
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local settings
+.claude/

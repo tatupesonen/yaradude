@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% load yaradude %}
+{% block title %}Rules{% endblock %}
+{% block content %}
+<div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+  <div>
+    <h1>Rules</h1>
+    <p class="mt-0.5 text-sm text-muted">Search names, descriptions, authors and rule source.</p>
+  </div>
+  {% if perms.rules.add_rule %}<a class="btn btn-primary" href="{% url 'rules:rule_create' %}">New rule</a>{% endif %}
+</div>
+
+{% if not has_rules %}
+<div class="card">
+  <div class="empty py-16">
+    <h2 class="text-fg">No rules yet</h2>
+    {% if perms.rules.import_rules %}
+    <p>Import the rules directory or upload <code>.yar</code> files first.</p>
+    <a class="btn btn-primary mt-2" href="{% url 'rules:import' %}">Go to Import</a>
+    {% else %}
+    <p>Nothing has been imported yet. Ask an editor to import rules.</p>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<form method="get" action="{% url 'rules:rule_list' %}" class="card mb-4 grid gap-3 p-3 sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(12rem,1.2fr)_minmax(0,4fr)_auto]" role="search" aria-label="Filter rules">
+  <div>
+    <label class="label" for="f-q">Search</label>
+    <input class="input" type="search" id="f-q" name="q" value="{{ values.q }}" placeholder="Name, description, author, source…">
+  </div>
+  {% if values.ruleset %}<input type="hidden" name="ruleset" value="{{ values.ruleset }}">{% endif %}
+  <details class="filters sm:order-3 sm:col-span-full lg:order-none lg:col-span-1"{% if values.path or values.tag or values.status or values.sort != 'name' %} open{% endif %}>
+    <summary class="btn btn-sm w-full cursor-pointer list-none justify-between">
+      <span>Filters{% if values.path or values.tag or values.status %} <span class="text-accent">(active)</span>{% endif %}</span>
+      <span aria-hidden="true" class="text-faint">▾</span>
+    </summary>
+    <div class="mt-3 grid grid-cols-2 gap-3 sm:mt-0 sm:grid-cols-4">
+      <div>
+        <label class="label" for="f-path">Ruleset path</label>
+        <input class="input" type="text" id="f-path" name="path" value="{{ values.path }}" placeholder="e.g. signature-base/" aria-describedby="f-path-help" spellcheck="false" autocapitalize="off">
+        <p class="sr-only" id="f-path-help">Matches anywhere in the ruleset path; end with a slash to select a directory.</p>
+      </div>
+      <div>
+        <label class="label" for="f-tag">Tag</label>
+        <select class="select" id="f-tag" name="tag">
+          <option value="">Any tag</option>
+          {% for tag in tags %}<option value="{{ tag }}"{% if values.tag == tag %} selected{% endif %}>{{ tag }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f-status">Status</label>
+        <select class="select" id="f-status" name="status">
+          {% for value, label in form.fields.status.choices %}<option value="{{ value }}"{% if values.status == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="label" for="f-sort">Sort</label>
+        <select class="select" id="f-sort" name="sort">
+          {% for value, label in form.fields.sort.choices %}<option value="{{ value }}"{% if values.sort == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+  </details>
+  <div class="flex items-end gap-2 sm:order-2 lg:order-none">
+    <button type="submit" class="btn btn-primary">Apply</button>
+    {% if filtered or values.sort != 'name' %}<a class="btn btn-ghost" href="{% url 'rules:rule_list' %}">Reset</a>{% endif %}
+  </div>
+</form>
+
+{% if filtered %}
+<ul class="-mt-2 mb-4 flex flex-wrap items-center gap-2 text-sm" aria-label="Active filters">
+  {% if values.q %}<li class="chip">Search: <span class="font-mono">{{ values.q }}</span><a href="{% query q='' %}" aria-label="Remove search">✕</a></li>{% endif %}
+  {% if selected_ruleset %}<li class="chip">Ruleset: <span class="font-mono">{{ selected_ruleset.name }}</span><a href="{% query ruleset='' %}" aria-label="Remove ruleset filter">✕</a></li>{% elif values.ruleset %}<li class="chip">Ruleset #{{ values.ruleset }}<a href="{% query ruleset='' %}" aria-label="Remove ruleset filter">✕</a></li>{% endif %}
+  {% if values.path %}<li class="chip">Path {% if values.path|slice:"-1:" == "/" %}starts with{% else %}contains{% endif %}: <span class="font-mono">{{ values.path }}</span><a href="{% query path='' %}" aria-label="Remove path filter">✕</a></li>{% endif %}
+  {% if values.tag %}<li class="chip">Tag: <span class="font-mono">{{ values.tag }}</span><a href="{% query tag='' %}" aria-label="Remove tag filter">✕</a></li>{% endif %}
+  {% if values.status %}<li class="chip">Status: {% for value, label in form.fields.status.choices %}{% if value == values.status %}{{ label }}{% endif %}{% endfor %}<a href="{% query status='' %}" aria-label="Remove status filter">✕</a></li>{% endif %}
+</ul>
+{% endif %}
+
+<div class="card">
+<form method="post" action="{% url 'rules:rule_export' %}" data-selection>
+  {% csrf_token %}
+  {% for key, value in values.items %}{% if value %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endif %}{% endfor %}
+  <div class="card-header">
+    <h2 class="text-base">
+      {% if filtered %}{{ page.paginator.count }} matching rule{{ page.paginator.count|pluralize }}{% else %}{{ page.paginator.count }} rule{{ page.paginator.count|pluralize }}{% endif %}
+    </h2>
+    <div class="flex flex-wrap items-center gap-2">
+      <label class="sr-only" for="export-format">Export format</label>
+      <select class="select w-auto py-1 text-sm" id="export-format" name="format">
+        <option value="yar">.yar file</option>
+        <option value="zip">.zip per ruleset</option>
+      </select>
+      <button type="submit" class="btn btn-sm" name="scope" value="selected" data-selection-count>Export selected</button>
+      <button type="submit" class="btn btn-sm" name="scope" value="filter">Export {% if filtered %}all matching{% else %}all{% endif %}</button>
+    </div>
+  </div>
+  <p class="border-b border-line bg-subtle/50 px-4 py-1.5 text-xs text-muted">Exports leave out removed rules. A combined export does not add private rules that exported rules depend on; select them too, or download the whole ruleset.</p>
+  {% if page.object_list %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col" class="w-8"><input type="checkbox" class="checkbox" data-select-all aria-label="Select all rules on this page" hidden></th>
+          <th scope="col">{% sort_header "Name" "name" values.sort %}</th>
+          <th scope="col">{% sort_header "Ruleset" "ruleset" values.sort %}</th>
+          <th scope="col" class="hidden md:table-cell">Description</th>
+          <th scope="col" class="hidden lg:table-cell">Tags</th>
+          <th scope="col">Status</th>
+          <th scope="col" class="hidden sm:table-cell">{% sort_header "Updated" "updated" values.sort %}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in page.object_list %}
+        <tr>
+          <td><input type="checkbox" class="checkbox" name="ids" value="{{ rule.pk }}" id="sel-{{ rule.pk }}" aria-label="Select {{ rule.name }}" data-select-item></td>
+          <td class="max-w-72"><a class="font-mono break-all{% if rule.removed_at %} text-muted line-through{% endif %}" href="{{ rule.get_absolute_url }}">{{ rule.name }}</a>{% if rule.is_private %} <span class="badge badge-neutral">private</span>{% endif %}{% if rule.is_global %} <span class="badge badge-neutral">global</span>{% endif %}</td>
+          <td class="max-w-56 truncate"><a class="text-muted" href="{{ rule.ruleset.get_absolute_url }}" title="{{ rule.ruleset.path }}">{{ rule.ruleset.name|basename }}</a></td>
+          <td class="hidden max-w-96 truncate text-muted md:table-cell" title="{{ rule.description }}">{{ rule.description|default:"—" }}</td>
+          <td class="hidden lg:table-cell">{% with tags=rule.tags.all %}<span class="flex max-w-64 flex-wrap gap-1">{% for tag in tags|slice:":4" %}<a class="tag" href="{% query tag=tag.name %}">{{ tag.name }}</a>{% endfor %}{% if tags|length > 4 %}<span class="text-xs text-faint" title="{{ tags|join:', ' }}">+{{ tags|length|add:"-4" }}</span>{% endif %}</span>{% endwith %}</td>
+          <td>{% rule_status rule compact=True %}</td>
+          <td class="hidden sm:table-cell">{{ rule.updated_at|ts:"short" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</form>
+{% if page.object_list %}
+{% include "rules/includes/pager.html" %}
+{% else %}
+<div class="empty">
+  <p>No rules match these filters.</p>
+  <a class="btn" href="{% url 'rules:rule_list' %}">Clear filters</a>
+</div>
+{% endif %}
+</div>
+{% endif %}
+{% endblock %}

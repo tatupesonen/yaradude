@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<div class="mx-auto mt-6 w-full max-w-sm sm:mt-16">
+  <div class="card">
+    <div class="card-body flex flex-col gap-5 px-6 py-6">
+      <div>
+        <h1>Sign in</h1>
+        <p class="mt-1 text-sm text-muted">Use the account an administrator created for you.</p>
+      </div>
+      {% if form.non_field_errors %}
+      <div class="alert alert-error" role="alert">
+        {% for error in form.non_field_errors %}<span>{{ error }}</span>{% endfor %}
+      </div>
+      {% endif %}
+      {% if next and user.is_authenticated %}
+      <div class="alert alert-warning" role="status"><span>Your account does not have access to that page.</span></div>
+      {% endif %}
+      <form method="post" action="{% url 'login' %}" class="flex flex-col gap-4">
+        {% csrf_token %}
+        <div>
+          <label class="label" for="{{ form.username.id_for_label }}">Username</label>
+          <input class="input" type="text" name="{{ form.username.html_name }}" id="{{ form.username.id_for_label }}" value="{{ form.username.value|default:'' }}" autocomplete="username" autocapitalize="none" autofocus required{% if form.errors %} aria-invalid="true"{% endif %}>
+        </div>
+        <div>
+          <label class="label" for="{{ form.password.id_for_label }}">Password</label>
+          <input class="input" type="password" name="{{ form.password.html_name }}" id="{{ form.password.id_for_label }}" autocomplete="current-password" required{% if form.errors %} aria-invalid="true"{% endif %}>
+        </div>
+        <input type="hidden" name="next" value="{{ next }}">
+        <button type="submit" class="btn btn-primary w-full py-2">Sign in</button>
+      </form>
+    </div>
+  </div>
+  <p class="mt-4 text-center text-xs text-faint">Access is granted through the Viewers and Editors groups.</p>
+</div>
+{% endblock %}
